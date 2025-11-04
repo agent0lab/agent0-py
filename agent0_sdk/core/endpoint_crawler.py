@@ -178,13 +178,13 @@ class EndpointCrawler:
     def fetch_a2a_capabilities(self, endpoint: str) -> Optional[Dict[str, Any]]:
         """
         Fetch A2A capabilities (skills) from an A2A server.
-        
+
         A2A Protocol uses agent cards to describe agent capabilities.
-        Tries multiple well-known paths: agentcard.json, .well-known/agent.json
-        
+        Tries multiple well-known paths: agentcard.json, .well-known/agent.json, .well-known/agent-card.json
+
         Args:
             endpoint: A2A endpoint URL (must be http:// or https://)
-            
+
         Returns:
             Dict with key: 'a2aSkills'
             Returns None if unable to fetch
@@ -194,37 +194,82 @@ class EndpointCrawler:
             if not endpoint.startswith(('http://', 'https://')):
                 logger.warning(f"A2A endpoint must be HTTP/HTTPS, got: {endpoint}")
                 return None
-            
+
             # Try multiple well-known paths for A2A agent cards
             agentcard_urls = [
+                endpoint,  # Try exact URL first (may already be full path)
                 f"{endpoint}/agentcard.json",
                 f"{endpoint}/.well-known/agent.json",
-                f"{endpoint.rstrip('/')}/.well-known/agent.json"
+                f"{endpoint}/.well-known/agent-card.json",  # Added support for agent-card.json
+                f"{endpoint.rstrip('/')}/.well-known/agent.json",
+                f"{endpoint.rstrip('/')}/.well-known/agent-card.json"  # Added support for agent-card.json
             ]
-            
+
             for agentcard_url in agentcard_urls:
                 logger.debug(f"Attempting to fetch A2A capabilities from {agentcard_url}")
-                
+
                 try:
                     response = requests.get(agentcard_url, timeout=self.timeout, allow_redirects=True)
-                    
+
                     if response.status_code == 200:
                         data = response.json()
-                        
-                        # Extract skills from agentcard
-                        skills = self._extract_list(data, 'skills')
-                        
+
+                        # Extract skills/tags from agentcard using A2A-specific logic
+                        skills = self._extract_a2a_skills_with_tags(data)
+
                         if skills:
-                            logger.info(f"Successfully fetched A2A capabilities from {endpoint}")
+                            logger.info(f"Successfully fetched A2A capabilities from {agentcard_url}: {len(skills)} skills")
                             return {'a2aSkills': skills}
-                except requests.exceptions.RequestException:
+                except requests.exceptions.RequestException as e:
                     # Try next URL
+                    logger.debug(f"Failed to fetch from {agentcard_url}: {e}")
                     continue
-                    
+
         except Exception as e:
             logger.debug(f"Unexpected error fetching A2A capabilities from {endpoint}: {e}")
-        
+
         return None
+
+    def _extract_a2a_skills_with_tags(self, data: Dict[str, Any]) -> List[str]:
+        """
+        Extract A2A skills by aggregating tags from all skill objects.
+
+        A2A agent cards have a structure like:
+        {
+          "skills": [
+            {
+              "id": "skill1",
+              "name": "Skill Name",
+              "tags": ["tag1", "tag2", "tag3"]
+            }
+          ]
+        }
+
+        This method extracts ALL tags from ALL skills and returns a flat list.
+
+        Args:
+            data: Agent card JSON data
+
+        Returns:
+            List of unique skill tags (strings)
+        """
+        all_tags = []
+
+        # Extract tags from skills array
+        if 'skills' in data and isinstance(data['skills'], list):
+            for skill in data['skills']:
+                if isinstance(skill, dict) and 'tags' in skill:
+                    tags = skill['tags']
+                    if isinstance(tags, list):
+                        # Add all string tags
+                        for tag in tags:
+                            if isinstance(tag, str) and tag not in all_tags:
+                                all_tags.append(tag)
+
+        # Remove duplicates while preserving order
+        unique_tags = list(dict.fromkeys(all_tags))
+
+        return unique_tags
     
     def _extract_list(self, data: Dict[str, Any], key: str) -> List[str]:
         """
