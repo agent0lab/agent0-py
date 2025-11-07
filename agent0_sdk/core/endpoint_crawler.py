@@ -178,13 +178,13 @@ class EndpointCrawler:
     def fetch_a2a_capabilities(self, endpoint: str) -> Optional[Dict[str, Any]]:
         """
         Fetch A2A capabilities (skills) from an A2A server.
-        
+
         A2A Protocol uses agent cards to describe agent capabilities.
-        Tries multiple well-known paths: agentcard.json, .well-known/agent.json
-        
+        Tries multiple well-known paths: agentcard.json, .well-known/agent.json, .well-known/agent-card.json
+
         Args:
             endpoint: A2A endpoint URL (must be http:// or https://)
-            
+
         Returns:
             Dict with key: 'a2aSkills'
             Returns None if unable to fetch
@@ -194,37 +194,97 @@ class EndpointCrawler:
             if not endpoint.startswith(('http://', 'https://')):
                 logger.warning(f"A2A endpoint must be HTTP/HTTPS, got: {endpoint}")
                 return None
-            
+
             # Try multiple well-known paths for A2A agent cards
+            # Per ERC-8004, endpoint may already be full URL to agent card
+            # Per A2A spec section 5.3, recommended discovery path is /.well-known/agent-card.json
             agentcard_urls = [
-                f"{endpoint}/agentcard.json",
-                f"{endpoint}/.well-known/agent.json",
-                f"{endpoint.rstrip('/')}/.well-known/agent.json"
+                endpoint,  # Try exact URL first (ERC-8004 format: full path to agent card)
+                f"{endpoint}/.well-known/agent-card.json",  # Spec-recommended discovery path
+                f"{endpoint.rstrip('/')}/.well-known/agent-card.json",
+                f"{endpoint}/.well-known/agent.json",  # Alternative well-known path
+                f"{endpoint.rstrip('/')}/.well-known/agent.json",
+                f"{endpoint}/agentcard.json"  # Legacy path
             ]
-            
+
             for agentcard_url in agentcard_urls:
                 logger.debug(f"Attempting to fetch A2A capabilities from {agentcard_url}")
-                
+
                 try:
                     response = requests.get(agentcard_url, timeout=self.timeout, allow_redirects=True)
-                    
+
                     if response.status_code == 200:
                         data = response.json()
-                        
-                        # Extract skills from agentcard
-                        skills = self._extract_list(data, 'skills')
-                        
+
+                        # Extract skill tags from agentcard
+                        skills = self._extract_a2a_skills(data)
+
                         if skills:
-                            logger.info(f"Successfully fetched A2A capabilities from {endpoint}")
+                            logger.info(f"Successfully fetched A2A capabilities from {agentcard_url}: {len(skills)} skills")
                             return {'a2aSkills': skills}
-                except requests.exceptions.RequestException:
+                except requests.exceptions.RequestException as e:
                     # Try next URL
+                    logger.debug(f"Failed to fetch from {agentcard_url}: {e}")
                     continue
-                    
+
         except Exception as e:
             logger.debug(f"Unexpected error fetching A2A capabilities from {endpoint}: {e}")
-        
+
         return None
+
+    def _extract_a2a_skills(self, data: Dict[str, Any]) -> List[str]:
+        """
+        Extract skill tags from A2A agent card.
+
+        Per A2A Protocol spec (v0.3.0), agent cards should have:
+          skills: AgentSkill[] where each AgentSkill has a tags[] array
+
+        This method also handles non-standard formats for backward compatibility:
+        - detailedSkills[].tags[] (custom extension)
+        - skills: ["tag1", "tag2"] (non-compliant flat array)
+
+        Args:
+            data: Agent card JSON data
+
+        Returns:
+            List of unique skill tags (strings)
+        """
+        result = []
+
+        # Try spec-compliant format first: skills[].tags[]
+        if 'skills' in data and isinstance(data['skills'], list):
+            for skill in data['skills']:
+                if isinstance(skill, dict) and 'tags' in skill:
+                    # Spec-compliant: AgentSkill object with tags
+                    tags = skill['tags']
+                    if isinstance(tags, list):
+                        for tag in tags:
+                            if isinstance(tag, str):
+                                result.append(tag)
+                elif isinstance(skill, str):
+                    # Non-compliant: flat string array (fallback)
+                    result.append(skill)
+
+        # Fallback to detailedSkills if no tags found in skills
+        # (custom extension used by some implementations)
+        if not result and 'detailedSkills' in data and isinstance(data['detailedSkills'], list):
+            for skill in data['detailedSkills']:
+                if isinstance(skill, dict) and 'tags' in skill:
+                    tags = skill['tags']
+                    if isinstance(tags, list):
+                        for tag in tags:
+                            if isinstance(tag, str):
+                                result.append(tag)
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_result = []
+        for item in result:
+            if item not in seen:
+                seen.add(item)
+                unique_result.append(item)
+
+        return unique_result
     
     def _extract_list(self, data: Dict[str, Any], key: str) -> List[str]:
         """
