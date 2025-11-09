@@ -45,3 +45,7 @@ Thumbs.db
 build/
 dist/
 
+# Test data discovery files (temporary scripts for finding test data)
+discover_test_data.py
+test_data_discovery.json
+

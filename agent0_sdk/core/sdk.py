@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Literal
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from .models import (
     AgentId, ChainId, Address, URI, Timestamp, IdemKey,
@@ -591,8 +594,26 @@ class SDK:
         page_size: int = 50,
         cursor: Optional[str] = None,
         sort: Optional[List[str]] = None,
+        chains: Optional[Union[List[ChainId], Literal["all"]]] = None,
     ) -> Dict[str, Any]:
         """Search agents filtered by reputation criteria."""
+        # Handle multi-chain search
+        if chains:
+            # Expand "all" if needed
+            if chains == "all":
+                chains = self.indexer._get_all_configured_chains()
+            
+            # If multiple chains or single chain different from default
+            if isinstance(chains, list) and len(chains) > 0:
+                if len(chains) > 1 or (len(chains) == 1 and chains[0] != self.chainId):
+                    return asyncio.run(
+                        self._search_agents_by_reputation_across_chains(
+                            agents, tags, reviewers, capabilities, skills, tasks, names,
+                            minAverageScore, includeRevoked, page_size, cursor, sort, chains
+                        )
+                    )
+        
+        # Single chain search (existing behavior)
         if not self.subgraph_client:
             raise ValueError("Subgraph client required for searchAgentsByReputation")
         
@@ -666,6 +687,185 @@ class SDK:
             
         except Exception as e:
             raise ValueError(f"Failed to search agents by reputation: {e}")
+    
+    async def _search_agents_by_reputation_across_chains(
+        self,
+        agents: Optional[List[AgentId]],
+        tags: Optional[List[str]],
+        reviewers: Optional[List[Address]],
+        capabilities: Optional[List[str]],
+        skills: Optional[List[str]],
+        tasks: Optional[List[str]],
+        names: Optional[List[str]],
+        minAverageScore: Optional[int],
+        includeRevoked: bool,
+        page_size: int,
+        cursor: Optional[str],
+        sort: Optional[List[str]],
+        chains: List[ChainId],
+    ) -> Dict[str, Any]:
+        """
+        Search agents by reputation across multiple chains in parallel.
+        
+        Similar to indexer._search_agents_across_chains() but for reputation-based search.
+        """
+        import time
+        start_time = time.time()
+        
+        if sort is None:
+            sort = ["createdAt:desc"]
+        
+        order_by = "createdAt"
+        order_direction = "desc"
+        if sort and len(sort) > 0:
+            sort_field = sort[0].split(":")
+            order_by = sort_field[0] if len(sort_field) >= 1 else order_by
+            order_direction = sort_field[1] if len(sort_field) >= 2 else order_direction
+        
+        skip = 0
+        if cursor:
+            try:
+                skip = int(cursor)
+            except ValueError:
+                skip = 0
+        
+        # Define async function for querying a single chain
+        async def query_single_chain(chain_id: int) -> Dict[str, Any]:
+            """Query one chain and return its results with metadata."""
+            try:
+                # Get subgraph client for this chain
+                subgraph_client = self.indexer._get_subgraph_client_for_chain(chain_id)
+                
+                if subgraph_client is None:
+                    logger.warning(f"No subgraph client available for chain {chain_id}")
+                    return {
+                        "chainId": chain_id,
+                        "status": "unavailable",
+                        "agents": [],
+                        "error": f"No subgraph configured for chain {chain_id}"
+                    }
+                
+                # Execute reputation search query
+                try:
+                    agents_data = subgraph_client.search_agents_by_reputation(
+                        agents=agents,
+                        tags=tags,
+                        reviewers=reviewers,
+                        capabilities=capabilities,
+                        skills=skills,
+                        tasks=tasks,
+                        names=names,
+                        minAverageScore=minAverageScore,
+                        includeRevoked=includeRevoked,
+                        first=page_size * 3,  # Fetch extra to allow for filtering/sorting
+                        skip=0,  # We'll handle pagination after aggregation
+                        order_by=order_by,
+                        order_direction=order_direction
+                    )
+                    
+                    logger.info(f"Chain {chain_id}: fetched {len(agents_data)} agents by reputation")
+                except Exception as e:
+                    logger.error(f"Error in search_agents_by_reputation for chain {chain_id}: {e}", exc_info=True)
+                    agents_data = []
+                
+                return {
+                    "chainId": chain_id,
+                    "status": "success",
+                    "agents": agents_data,
+                    "count": len(agents_data),
+                }
+                
+            except Exception as e:
+                logger.error(f"Error querying chain {chain_id} for reputation search: {e}", exc_info=True)
+                return {
+                    "chainId": chain_id,
+                    "status": "error",
+                    "agents": [],
+                    "error": str(e),
+                    "count": 0
+                }
+        
+        # Execute queries in parallel
+        chain_tasks = [query_single_chain(chain_id) for chain_id in chains]
+        chain_results = await asyncio.gather(*chain_tasks)
+        
+        # Aggregate results from all chains
+        all_agents = []
+        successful_chains = []
+        failed_chains = []
+        
+        for result in chain_results:
+            chain_id = result["chainId"]
+            if result["status"] == "success":
+                successful_chains.append(chain_id)
+                agents_count = len(result.get("agents", []))
+                logger.debug(f"Chain {chain_id}: aggregating {agents_count} agents")
+                all_agents.extend(result["agents"])
+            else:
+                failed_chains.append(chain_id)
+                logger.warning(f"Chain {chain_id}: status={result.get('status')}, error={result.get('error', 'N/A')}")
+        
+        logger.debug(f"Total agents aggregated: {len(all_agents)} from {len(successful_chains)} chains")
+        
+        # Transform to AgentSummary objects
+        from .models import AgentSummary
+        results = []
+        for agent_data in all_agents:
+            reg_file = agent_data.get('registrationFile') or {}
+            if not isinstance(reg_file, dict):
+                reg_file = {}
+            
+            agent_summary = AgentSummary(
+                chainId=int(agent_data.get('chainId', 0)),
+                agentId=agent_data.get('id'),
+                name=reg_file.get('name', f"Agent {agent_data.get('id')}"),
+                image=reg_file.get('image'),
+                description=reg_file.get('description', ''),
+                owners=[agent_data.get('owner', '')],
+                operators=agent_data.get('operators', []),
+                mcp=reg_file.get('mcpEndpoint') is not None,
+                a2a=reg_file.get('a2aEndpoint') is not None,
+                ens=reg_file.get('ens'),
+                did=reg_file.get('did'),
+                walletAddress=reg_file.get('agentWallet'),
+                supportedTrusts=reg_file.get('supportedTrusts', []),
+                a2aSkills=reg_file.get('a2aSkills', []),
+                mcpTools=reg_file.get('mcpTools', []),
+                mcpPrompts=reg_file.get('mcpPrompts', []),
+                mcpResources=reg_file.get('mcpResources', []),
+                active=reg_file.get('active', True),
+                x402support=reg_file.get('x402support', False),
+                extras={'averageScore': agent_data.get('averageScore')}
+            )
+            results.append(agent_summary)
+        
+        # Sort by averageScore (descending) if available, otherwise by createdAt
+        results.sort(
+            key=lambda x: (
+                x.extras.get('averageScore') if x.extras.get('averageScore') is not None else 0,
+                x.chainId,
+                x.agentId
+            ),
+            reverse=True
+        )
+        
+        # Apply pagination
+        paginated_results = results[skip:skip + page_size]
+        next_cursor = str(skip + len(paginated_results)) if len(paginated_results) == page_size and skip + len(paginated_results) < len(results) else None
+        
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        
+        return {
+            "items": paginated_results,
+            "nextCursor": next_cursor,
+            "meta": {
+                "chains": chains,
+                "successfulChains": successful_chains,
+                "failedChains": failed_chains,
+                "totalResults": len(results),
+                "timing": {"totalMs": elapsed_ms}
+            }
+        }
     
     # Feedback methods - delegate to feedback_manager
     def signFeedbackAuth(

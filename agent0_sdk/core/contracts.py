@@ -477,6 +477,11 @@ DEFAULT_REGISTRIES: Dict[int, Dict[str, str]] = {
         "REPUTATION": "0x8004bd8daB57f14Ed299135749a5CB5c42d341BF",
         "VALIDATION": "0x8004C269D0A5647E51E121FeB226200ECE932d55",
     },
+    80002: {  # Polygon Amoy
+        "IDENTITY": "0x8004ad19E14B9e0654f73353e8a0B600D46C2898",
+        "REPUTATION": "0x8004B12F4C2B42d00c46479e859C92e39044C930",
+        "VALIDATION": "0x8004C11C213ff7BaD36489bcBDF947ba5eee289B",
+    },
     59141: {  # Linea Sepolia
         "IDENTITY": "0x8004aa7C931bCE1233973a0C6A667f73F66282e7",
         "REPUTATION": "0x8004bd8483b99310df121c46ED8858616b2Bba02",
@@ -487,4 +492,6 @@ DEFAULT_REGISTRIES: Dict[int, Dict[str, str]] = {
 # Default subgraph URLs for different chains
 DEFAULT_SUBGRAPH_URLS: Dict[int, str] = {
     11155111: "https://gateway.thegraph.com/api/00a452ad3cd1900273ea62c1bf283f93/subgraphs/id/6wQRC7geo9XYAhckfmfo8kbMRLeWU8KQd3XsJqFKmZLT",  # Ethereum Sepolia
+    84532: "https://gateway.thegraph.com/api/00a452ad3cd1900273ea62c1bf283f93/subgraphs/id/GjQEDgEKqoh5Yc8MUgxoQoRATEJdEiH7HbocfR1aFiHa",  # Base Sepolia
+    80002: "https://gateway.thegraph.com/api/00a452ad3cd1900273ea62c1bf283f93/subgraphs/id/2A1JB18r1mF2VNP4QBH4mmxd74kbHoM6xLXC8ABAKf7j",  # Polygon Amoy
 }

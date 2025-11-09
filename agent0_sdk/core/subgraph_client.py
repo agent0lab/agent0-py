@@ -38,7 +38,7 @@ class SubgraphClient:
                     'variables': variables or {}
                 },
                 headers={'Content-Type': 'application/json'},
-                timeout=30
+                timeout=10
             )
             response.raise_for_status()
             result = response.json()
@@ -716,12 +716,14 @@ class SubgraphClient:
                 return []
         else:
             # No feedback filters - query agents directly
-            agent_filters = []
+            # For reputation search, we want agents that have feedback
+            # Filter by totalFeedback > 0 to only get agents with feedback
+            agent_filters = ['totalFeedback_gt: 0']  # Only agents with feedback (BigInt comparison)
             if agents is not None and len(agents) > 0:
                 agent_ids = [f'"{aid}"' for aid in agents]
                 agent_filters.append(f'id_in: [{", ".join(agent_ids)}]')
             
-            agent_where = f"where: {{ {', '.join(agent_filters)} }}" if agent_filters else ""
+            agent_where = f"where: {{ {', '.join(agent_filters)} }}"
         
         # Build feedback where for agent query (to calculate scores)
         feedback_where_for_agents = f"{{ {', '.join(feedback_filters)} }}" if feedback_filters else "{}"
@@ -784,6 +786,12 @@ class SubgraphClient:
         
         try:
             result = self.query(query)
+            
+            # Check for GraphQL errors
+            if 'errors' in result:
+                logger.error(f"GraphQL errors in search_agents_by_reputation: {result['errors']}")
+                return []
+            
             agents_result = result.get('agents', [])
             
             # Calculate average scores
@@ -805,6 +813,18 @@ class SubgraphClient:
                     agent for agent in agents_result
                     if agent.get('averageScore') is not None and agent['averageScore'] >= minAverageScore
                 ]
+            
+            # For reputation search, filter logic:
+            # - If specific agents were requested, return them even if averageScore is None
+            #   (the user explicitly asked for these agents, so return them)
+            # - If general search (no specific agents), only return agents with reputation data
+            if agents is None or len(agents) == 0:
+                # General search - only return agents with reputation
+                agents_result = [
+                    agent for agent in agents_result
+                    if agent.get('averageScore') is not None
+                ]
+            # else: specific agents requested - return all requested agents (even if averageScore is None)
             
             return agents_result
             

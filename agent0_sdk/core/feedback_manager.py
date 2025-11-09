@@ -703,7 +703,46 @@ class FeedbackManager:
         groupBy: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Get reputation summary for an agent with optional grouping."""
-        # Parse agent ID
+        # Parse chainId from agentId
+        chain_id = None
+        if ":" in agentId:
+            try:
+                chain_id = int(agentId.split(":", 1)[0])
+            except ValueError:
+                chain_id = None
+        
+        # Try subgraph first (if available and indexer supports it)
+        if self.indexer and self.subgraph_client:
+            # Get correct subgraph client for the chain
+            subgraph_client = None
+            full_agent_id = agentId
+            
+            if chain_id is not None:
+                subgraph_client = self.indexer._get_subgraph_client_for_chain(chain_id)
+            else:
+                # No chainId in agentId, use SDK's default
+                # Construct full agentId format for subgraph query
+                default_chain_id = self.web3_client.chain_id
+                token_id = agentId.split(":")[-1] if ":" in agentId else agentId
+                full_agent_id = f"{default_chain_id}:{token_id}"
+                subgraph_client = self.subgraph_client
+            
+            if subgraph_client:
+                # Use subgraph to calculate reputation
+                return self._get_reputation_summary_from_subgraph(
+                    full_agent_id, clientAddresses, tag1, tag2, groupBy
+                )
+        
+        # Fallback to blockchain (requires chain-specific web3 client)
+        # For now, only works if chain matches SDK's default
+        if chain_id is not None and chain_id != self.web3_client.chain_id:
+            raise ValueError(
+                f"Blockchain reputation summary not supported for chain {chain_id}. "
+                f"SDK is configured for chain {self.web3_client.chain_id}. "
+                f"Use subgraph-based summary instead."
+            )
+        
+        # Parse agent ID for blockchain call
         if ":" in agentId:
             tokenId = int(agentId.split(":")[-1])
         else:
@@ -764,6 +803,67 @@ class FeedbackManager:
             
         except Exception as e:
             raise ValueError(f"Failed to get reputation summary: {e}")
+    
+    def _get_reputation_summary_from_subgraph(
+        self,
+        agentId: AgentId,
+        clientAddresses: Optional[List[Address]] = None,
+        tag1: Optional[str] = None,
+        tag2: Optional[str] = None,
+        groupBy: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Get reputation summary from subgraph."""
+        # Build tags list
+        tags = []
+        if tag1:
+            tags.append(tag1)
+        if tag2:
+            tags.append(tag2)
+        
+        # Get all feedback for the agent using indexer (which handles multi-chain)
+        # Use searchFeedback with a large limit to get all feedback
+        all_feedback = self.searchFeedback(
+            agentId=agentId,
+            clientAddresses=clientAddresses,
+            tags=tags if tags else None,
+            include_revoked=False,
+            first=1000,  # Large limit to get all feedback
+            skip=0
+        )
+        
+        # Calculate summary statistics
+        count = len(all_feedback)
+        scores = [fb.score for fb in all_feedback if fb.score is not None]
+        average_score = sum(scores) / len(scores) if scores else 0.0
+        
+        # If no grouping requested, return simple summary
+        if not groupBy:
+            return {
+                "agentId": agentId,
+                "count": count,
+                "averageScore": average_score,
+                "filters": {
+                    "clientAddresses": clientAddresses,
+                    "tag1": tag1,
+                    "tag2": tag2
+                }
+            }
+        
+        # Group feedback by requested dimensions
+        grouped_data = self._groupFeedback(all_feedback, groupBy)
+        
+        return {
+            "agentId": agentId,
+            "totalCount": count,
+            "totalAverageScore": average_score,
+            "groupedData": grouped_data,
+            "filters": {
+                "clientAddresses": clientAddresses,
+                "tag1": tag1,
+                "tag2": tag2
+            },
+            "groupBy": groupBy
+        }
     
     def _groupFeedback(self, feedbackList: List[Feedback], groupBy: List[str]) -> Dict[str, Any]:
         """Group feedback by specified dimensions."""

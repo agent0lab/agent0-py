@@ -372,19 +372,40 @@ class AgentIndexer:
 
     def get_agent(self, agent_id: AgentId) -> AgentSummary:
         """Get agent summary from index."""
+        # Parse chainId from agentId
+        chain_id, token_id = self._parse_agent_id(agent_id)
+        
+        # Get subgraph client for the chain
+        subgraph_client = None
+        full_agent_id = agent_id
+        
+        if chain_id is not None:
+            subgraph_client = self._get_subgraph_client_for_chain(chain_id)
+        else:
+            # No chainId in agentId, use SDK's default
+            # Construct full agentId format for subgraph query
+            default_chain_id = self.web3_client.chain_id
+            full_agent_id = f"{default_chain_id}:{token_id}"
+            subgraph_client = self.subgraph_client
+        
         # Use subgraph if available (preferred)
-        if self.subgraph_client:
-            return self._get_agent_from_subgraph(agent_id)
+        if subgraph_client:
+            return self._get_agent_from_subgraph(full_agent_id, subgraph_client)
         
         # Fallback to local cache
         if agent_id not in self.store["agents"]:
             raise ValueError(f"Agent {agent_id} not found in index")
         return self.store["agents"][agent_id]
     
-    def _get_agent_from_subgraph(self, agent_id: AgentId) -> AgentSummary:
+    def _get_agent_from_subgraph(self, agent_id: AgentId, subgraph_client: Optional[Any] = None) -> AgentSummary:
         """Get agent summary from subgraph."""
+        # Use provided client or default
+        client = subgraph_client or self.subgraph_client
+        if not client:
+            raise ValueError("No subgraph client available")
+        
         try:
-            agent_data = self.subgraph_client.get_agent_by_id(agent_id)
+            agent_data = client.get_agent_by_id(agent_id)
             
             if agent_data is None:
                 raise ValueError(f"Agent {agent_id} not found in subgraph")
@@ -432,8 +453,9 @@ class AgentIndexer:
             params.chains = self._get_all_configured_chains()
             logger.info(f"Expanding 'all' to configured chains: {params.chains}")
 
-        # Detect if multi-chain query requested
-        if params.chains and len(params.chains) > 1:
+        # If chains are explicitly specified (even a single chain), use multi-chain path
+        # This ensures the correct subgraph client is used for the requested chain(s)
+        if params.chains and len(params.chains) > 0:
             # Validate chains are configured
             available_chains = set(self._get_all_configured_chains())
             requested_chains = set(params.chains)
@@ -1083,11 +1105,27 @@ class AgentIndexer:
         skip: int = 0,
     ) -> List[Feedback]:
         """Search feedback for an agent - uses subgraph if available."""
+        # Parse chainId from agentId
+        chain_id, token_id = self._parse_agent_id(agentId)
+        
+        # Get subgraph client for the chain
+        subgraph_client = None
+        full_agent_id = agentId
+        
+        if chain_id is not None:
+            subgraph_client = self._get_subgraph_client_for_chain(chain_id)
+        else:
+            # No chainId in agentId, use SDK's default
+            # Construct full agentId format for subgraph query
+            default_chain_id = self.web3_client.chain_id
+            full_agent_id = f"{default_chain_id}:{token_id}"
+            subgraph_client = self.subgraph_client
+        
         # Use subgraph if available (preferred)
-        if self.subgraph_client:
+        if subgraph_client:
             return self._search_feedback_subgraph(
-                agentId, clientAddresses, tags, capabilities, skills, tasks, names,
-                minScore, maxScore, include_revoked, first, skip
+                full_agent_id, clientAddresses, tags, capabilities, skills, tasks, names,
+                minScore, maxScore, include_revoked, first, skip, subgraph_client
             )
         
         # Fallback not implemented (would require blockchain queries)
@@ -1108,8 +1146,14 @@ class AgentIndexer:
         include_revoked: bool,
         first: int,
         skip: int,
+        subgraph_client: Optional[Any] = None,
     ) -> List[Feedback]:
         """Search feedback using subgraph."""
+        # Use provided client or default
+        client = subgraph_client or self.subgraph_client
+        if not client:
+            return []
+        
         # Create SearchFeedbackParams
         params = SearchFeedbackParams(
             agents=[agentId],
@@ -1125,7 +1169,7 @@ class AgentIndexer:
         )
         
         # Query subgraph
-        feedbacks_data = self.subgraph_client.search_feedback(
+        feedbacks_data = client.search_feedback(
             params=params,
             first=first,
             skip=skip,
@@ -1412,6 +1456,26 @@ class AgentIndexer:
 
         # 4. Not found
         return None
+
+    def _parse_agent_id(self, agent_id: AgentId) -> tuple[Optional[int], str]:
+        """
+        Parse agentId to extract chainId and tokenId.
+        
+        Returns:
+            (chain_id, token_id_str) where:
+            - chain_id: int if "chainId:tokenId" format, None if just "tokenId"
+            - token_id_str: the tokenId part (always present)
+        """
+        if ":" in agent_id:
+            parts = agent_id.split(":", 1)
+            try:
+                chain_id = int(parts[0])
+                token_id = parts[1]
+                return (chain_id, token_id)
+            except ValueError:
+                # Invalid chainId, treat as tokenId only
+                return (None, agent_id)
+        return (None, agent_id)
 
     def _get_all_configured_chains(self) -> List[int]:
         """
