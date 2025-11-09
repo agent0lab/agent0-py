@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Literal
 from datetime import datetime
 
 
@@ -269,7 +269,7 @@ class Feedback:
 @dataclass
 class SearchParams:
     """Parameters for agent search."""
-    chains: Optional[List[ChainId]] = None
+    chains: Optional[Union[List[ChainId], Literal["all"]]] = None
     name: Optional[str] = None  # case-insensitive substring
     description: Optional[str] = None  # semantic; vector distance < threshold
     owners: Optional[List[Address]] = None
@@ -286,6 +286,7 @@ class SearchParams:
     mcpResources: Optional[List[str]] = None
     active: Optional[bool] = True
     x402support: Optional[bool] = None
+    deduplicate_cross_chain: bool = False  # Deduplicate same agent across chains
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary, filtering out None values."""

@@ -204,7 +204,6 @@ agent.register("https://example.com/agent-registration.json")
 
 - More chains (currently Ethereum Sepolia only)
 - Support for validations
-- Multi-chain agents search
 - Enhanced x402 payments
 - Semantic/Vectorial search
 - Advanced reputation aggregation

@@ -102,7 +102,8 @@ class SDK:
             web3_client=self.web3_client,
             store=indexingStore,
             embeddings=embeddings,
-            subgraph_client=self.subgraph_client
+            subgraph_client=self.subgraph_client,
+            subgraph_url_overrides=self._subgraph_urls
         )
         
         # Initialize IPFS client based on configuration
@@ -438,7 +439,7 @@ class SDK:
     def searchAgents(
         self,
         params: Union[SearchParams, Dict[str, Any], None] = None,
-        sort: List[str] = None,
+        sort: Union[str, List[str], None] = None,
         page_size: int = 50,
         cursor: Optional[str] = None,
         **kwargs  # Accept search criteria as kwargs for better DX
@@ -466,7 +467,9 @@ class SDK:
         
         if sort is None:
             sort = ["updatedAt:desc"]
-        
+        elif isinstance(sort, str):
+            sort = [sort]
+
         return self.indexer.search_agents(params, sort, page_size, cursor)
 
     # Feedback methods

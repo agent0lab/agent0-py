@@ -54,18 +54,27 @@ class AgentIndexer:
         embeddings: Optional[Any] = None,
         subgraph_client: Optional[Any] = None,
         identity_registry: Optional[Any] = None,
+        subgraph_url_overrides: Optional[Dict[int, str]] = None,
     ):
-        """Initialize indexer."""
+        """Initialize indexer with optional subgraph URL overrides for multiple chains."""
         self.web3_client = web3_client
         self.store = store or self._create_default_store()
         self.embeddings = embeddings or self._create_default_embeddings()
         self.subgraph_client = subgraph_client
         self.identity_registry = identity_registry
+        self.subgraph_url_overrides = subgraph_url_overrides or {}
         self._agent_cache = {}  # Cache for agent data
         self._cache_timestamp = 0
         self._cache_ttl = 7 * 24 * 60 * 60  # 1 week cache TTL (604800 seconds)
         self._http_cache = {}  # Cache for HTTP content
         self._http_cache_ttl = 60 * 60  # 1 hour cache TTL for HTTP content
+
+        # Cache for subgraph clients (one per chain)
+        self._subgraph_client_cache: Dict[int, Any] = {}
+
+        # If default subgraph_client provided, cache it for current chain
+        if self.subgraph_client:
+            self._subgraph_client_cache[self.web3_client.chain_id] = self.subgraph_client
 
     def _create_default_store(self) -> Dict[str, Any]:
         """Create default in-memory store."""
@@ -418,13 +427,321 @@ class AgentIndexer:
         cursor: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Search for agents by querying the subgraph or blockchain."""
+        # Handle "all" chains shorthand
+        if params.chains == "all":
+            params.chains = self._get_all_configured_chains()
+            logger.info(f"Expanding 'all' to configured chains: {params.chains}")
+
+        # Detect if multi-chain query requested
+        if params.chains and len(params.chains) > 1:
+            # Validate chains are configured
+            available_chains = set(self._get_all_configured_chains())
+            requested_chains = set(params.chains)
+            invalid_chains = requested_chains - available_chains
+
+            if invalid_chains:
+                logger.warning(
+                    f"Requested chains not configured: {invalid_chains}. "
+                    f"Available chains: {available_chains}"
+                )
+                # Filter to valid chains only
+                valid_chains = list(requested_chains & available_chains)
+                if not valid_chains:
+                    return {
+                        "items": [],
+                        "nextCursor": None,
+                        "meta": {
+                            "chains": list(requested_chains),
+                            "successfulChains": [],
+                            "failedChains": list(requested_chains),
+                            "error": f"No valid chains configured. Available: {list(available_chains)}"
+                        }
+                    }
+                params.chains = valid_chains
+
+            return asyncio.run(
+                self._search_agents_across_chains(params, sort, page_size, cursor)
+            )
+
         # Use subgraph if available (preferred)
         if self.subgraph_client:
             return self._search_agents_via_subgraph(params, sort, page_size, cursor)
-        
+
         # Fallback to blockchain queries
         return self._search_agents_via_blockchain(params, sort, page_size, cursor)
-    
+
+    async def _search_agents_across_chains(
+        self,
+        params: SearchParams,
+        sort: List[str],
+        page_size: int,
+        cursor: Optional[str] = None,
+        timeout: float = 30.0,
+    ) -> Dict[str, Any]:
+        """
+        Search agents across multiple chains in parallel.
+
+        This method is called when params.chains contains 2+ chain IDs.
+        It executes one subgraph query per chain, all in parallel using asyncio.
+
+        Args:
+            params: Search parameters
+            sort: Sort specification
+            page_size: Number of results per page
+            cursor: Pagination cursor
+            timeout: Maximum time in seconds for all chain queries (default: 30.0)
+
+        Returns:
+            {
+                "items": [agent_dict, ...],
+                "nextCursor": str or None,
+                "meta": {
+                    "chains": [chainId, ...],
+                    "successfulChains": [chainId, ...],
+                    "failedChains": [chainId, ...],
+                    "totalResults": int,
+                    "timing": {"totalMs": int}
+                }
+            }
+        """
+        import time
+        start_time = time.time()
+        # Step 1: Determine which chains to query
+        chains_to_query = params.chains if params.chains else self._get_all_configured_chains()
+
+        if not chains_to_query or len(chains_to_query) == 0:
+            logger.warning("No chains specified or configured for multi-chain query")
+            return {"items": [], "nextCursor": None, "meta": {"chains": [], "successfulChains": [], "failedChains": []}}
+
+        # Step 2: Parse pagination cursor (if any)
+        chain_cursors = self._parse_multi_chain_cursor(cursor)
+        global_offset = chain_cursors.get("_global_offset", 0)
+
+        # Step 3: Define async function for querying a single chain
+        async def query_single_chain(chain_id: int) -> Dict[str, Any]:
+            """Query one chain and return its results with metadata."""
+            try:
+                # Get subgraph client for this chain
+                subgraph_client = self._get_subgraph_client_for_chain(chain_id)
+
+                if subgraph_client is None:
+                    logger.warning(f"No subgraph client available for chain {chain_id}")
+                    return {
+                        "chainId": chain_id,
+                        "status": "unavailable",
+                        "agents": [],
+                        "error": f"No subgraph configured for chain {chain_id}"
+                    }
+
+                # Build WHERE clause for this chain's query
+                # (reuse existing logic from _search_agents_via_subgraph)
+                where_clause = {}
+                reg_file_where = {}
+
+                if params.name is not None:
+                    reg_file_where["name_contains"] = params.name
+                if params.active is not None:
+                    reg_file_where["active"] = params.active
+                if params.x402support is not None:
+                    reg_file_where["x402support"] = params.x402support
+                if params.mcp is not None:
+                    if params.mcp:
+                        reg_file_where["mcpEndpoint_not"] = None
+                    else:
+                        reg_file_where["mcpEndpoint"] = None
+                if params.a2a is not None:
+                    if params.a2a:
+                        reg_file_where["a2aEndpoint_not"] = None
+                    else:
+                        reg_file_where["a2aEndpoint"] = None
+                if params.ens is not None:
+                    reg_file_where["ens"] = params.ens
+                if params.did is not None:
+                    reg_file_where["did"] = params.did
+                if params.walletAddress is not None:
+                    reg_file_where["agentWallet"] = params.walletAddress
+
+                if reg_file_where:
+                    where_clause["registrationFile_"] = reg_file_where
+
+                # Owner filtering
+                if params.owners is not None and len(params.owners) > 0:
+                    normalized_owners = [owner.lower() for owner in params.owners]
+                    if len(normalized_owners) == 1:
+                        where_clause["owner"] = normalized_owners[0]
+                    else:
+                        where_clause["owner_in"] = normalized_owners
+
+                # Operator filtering
+                if params.operators is not None and len(params.operators) > 0:
+                    normalized_operators = [op.lower() for op in params.operators]
+                    where_clause["operators_contains"] = normalized_operators
+
+                # Get pagination offset for this chain (not used in multi-chain, fetch all)
+                skip = 0
+
+                # Execute subgraph query
+                agents = subgraph_client.get_agents(
+                    where=where_clause if where_clause else None,
+                    first=page_size * 3,  # Fetch extra to allow for filtering/sorting
+                    skip=skip,
+                    order_by=self._extract_order_by(sort),
+                    order_direction=self._extract_order_direction(sort)
+                )
+
+                logger.info(f"Chain {chain_id}: fetched {len(agents)} agents")
+
+                return {
+                    "chainId": chain_id,
+                    "status": "success",
+                    "agents": agents,
+                    "count": len(agents),
+                }
+
+            except Exception as e:
+                logger.error(f"Error querying chain {chain_id}: {e}", exc_info=True)
+                return {
+                    "chainId": chain_id,
+                    "status": "error",
+                    "agents": [],
+                    "error": str(e)
+                }
+
+        # Step 4: Execute all chain queries in parallel with timeout
+        logger.info(f"Querying {len(chains_to_query)} chains in parallel: {chains_to_query}")
+        tasks = [query_single_chain(chain_id) for chain_id in chains_to_query]
+
+        try:
+            chain_results = await asyncio.wait_for(
+                asyncio.gather(*tasks),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Multi-chain query timed out after {timeout}s")
+            # Collect results from completed tasks
+            chain_results = []
+            for task in tasks:
+                if task.done():
+                    try:
+                        chain_results.append(task.result())
+                    except Exception as e:
+                        logger.warning(f"Task failed: {e}")
+                else:
+                    # Task didn't complete - mark as timeout
+                    chain_results.append({
+                        "chainId": None,
+                        "status": "timeout",
+                        "agents": [],
+                        "error": f"Query timed out after {timeout}s"
+                    })
+
+        # Step 5: Extract successful results and track failures
+        all_agents = []
+        successful_chains = []
+        failed_chains = []
+
+        for result in chain_results:
+            chain_id = result["chainId"]
+
+            if result["status"] == "success":
+                successful_chains.append(chain_id)
+                all_agents.extend(result["agents"])
+            else:
+                failed_chains.append(chain_id)
+                logger.warning(
+                    f"Chain {chain_id} query failed: {result.get('error', 'Unknown error')}"
+                )
+
+        logger.info(f"Multi-chain query: {len(successful_chains)} successful, {len(failed_chains)} failed, {len(all_agents)} total agents")
+
+        # If ALL chains failed, raise error
+        if len(successful_chains) == 0:
+            raise ConnectionError(
+                f"All chains failed: {', '.join(str(c) for c in failed_chains)}"
+            )
+
+        # Step 6: Apply cross-chain filtering (for fields not supported by subgraph WHERE clause)
+        filtered_agents = self._apply_cross_chain_filters(all_agents, params)
+        logger.info(f"After cross-chain filters: {len(filtered_agents)} agents")
+
+        # Step 7: Deduplicate if requested
+        deduplicated_agents = self._deduplicate_agents_cross_chain(filtered_agents, params)
+        logger.info(f"After deduplication: {len(deduplicated_agents)} agents")
+
+        # Step 8: Sort across chains
+        sorted_agents = self._sort_agents_cross_chain(deduplicated_agents, sort)
+        logger.info(f"After sorting: {len(sorted_agents)} agents")
+
+        # Step 9: Apply pagination
+        start_idx = global_offset
+        paginated_agents = sorted_agents[start_idx:start_idx + page_size]
+
+        # Step 10: Convert to result format (keep as dicts, SDK will convert to AgentSummary)
+        results = []
+        for agent_data in paginated_agents:
+            reg_file = agent_data.get('registrationFile') or {}
+            if not isinstance(reg_file, dict):
+                reg_file = {}
+
+            result_agent = {
+                "agentId": agent_data.get('id'),
+                "chainId": agent_data.get('chainId'),
+                "name": reg_file.get('name', f"Agent {agent_data.get('agentId')}"),
+                "description": reg_file.get('description', ''),
+                "image": reg_file.get('image'),
+                "owner": agent_data.get('owner'),
+                "operators": agent_data.get('operators', []),
+                "mcp": reg_file.get('mcpEndpoint') is not None,
+                "a2a": reg_file.get('a2aEndpoint') is not None,
+                "ens": reg_file.get('ens'),
+                "did": reg_file.get('did'),
+                "walletAddress": reg_file.get('agentWallet'),
+                "supportedTrusts": reg_file.get('supportedTrusts', []),
+                "a2aSkills": reg_file.get('a2aSkills', []),
+                "mcpTools": reg_file.get('mcpTools', []),
+                "mcpPrompts": reg_file.get('mcpPrompts', []),
+                "mcpResources": reg_file.get('mcpResources', []),
+                "active": reg_file.get('active', True),
+                "x402support": reg_file.get('x402support', False),
+                "totalFeedback": agent_data.get('totalFeedback', 0),
+                "lastActivity": agent_data.get('lastActivity'),
+                "updatedAt": agent_data.get('updatedAt'),
+                "extras": {}
+            }
+
+            # Add deployedOn if deduplication was used
+            if 'deployedOn' in agent_data:
+                result_agent['extras']['deployedOn'] = agent_data['deployedOn']
+
+            results.append(result_agent)
+
+        # Step 11: Calculate next cursor
+        next_cursor = None
+        if len(sorted_agents) > start_idx + page_size:
+            # More results available
+            next_cursor = self._create_multi_chain_cursor(
+                global_offset=start_idx + page_size
+            )
+
+        # Step 12: Build response with metadata
+        query_time = time.time() - start_time
+
+        return {
+            "items": results,
+            "nextCursor": next_cursor,
+            "meta": {
+                "chains": chains_to_query,
+                "successfulChains": successful_chains,
+                "failedChains": failed_chains,
+                "totalResults": len(sorted_agents),
+                "pageResults": len(results),
+                "timing": {
+                    "totalMs": int(query_time * 1000),
+                    "averagePerChainMs": int(query_time * 1000 / len(chains_to_query)) if chains_to_query else 0,
+                }
+            }
+        }
+
     def _search_agents_via_subgraph(
         self,
         params: SearchParams,
@@ -1030,3 +1347,344 @@ class AgentIndexer:
         except Exception as e:
             logger.warning(f"Could not parse token URI {token_uri}: {e}")
             return None
+
+    def _get_subgraph_client_for_chain(self, chain_id: int):
+        """
+        Get or create SubgraphClient for a specific chain.
+
+        Checks (in order):
+        1. Client cache (already created)
+        2. Subgraph URL overrides (from constructor)
+        3. DEFAULT_SUBGRAPH_URLS (from contracts.py)
+        4. Environment variables (SUBGRAPH_URL_<chainId>)
+
+        Returns None if no subgraph URL is available for this chain.
+        """
+        # Check cache first
+        if chain_id in self._subgraph_client_cache:
+            return self._subgraph_client_cache[chain_id]
+
+        # Get subgraph URL for this chain
+        subgraph_url = self._get_subgraph_url_for_chain(chain_id)
+
+        if subgraph_url is None:
+            logger.warning(f"No subgraph URL configured for chain {chain_id}")
+            return None
+
+        # Create new SubgraphClient
+        from .subgraph_client import SubgraphClient
+        client = SubgraphClient(subgraph_url)
+
+        # Cache for future use
+        self._subgraph_client_cache[chain_id] = client
+
+        logger.info(f"Created subgraph client for chain {chain_id}: {subgraph_url}")
+
+        return client
+
+    def _get_subgraph_url_for_chain(self, chain_id: int) -> Optional[str]:
+        """
+        Get subgraph URL for a specific chain.
+
+        Priority order:
+        1. Constructor-provided overrides (self.subgraph_url_overrides)
+        2. DEFAULT_SUBGRAPH_URLS from contracts.py
+        3. Environment variable SUBGRAPH_URL_<chainId>
+        4. None (not configured)
+        """
+        import os
+
+        # 1. Check constructor overrides
+        if chain_id in self.subgraph_url_overrides:
+            return self.subgraph_url_overrides[chain_id]
+
+        # 2. Check DEFAULT_SUBGRAPH_URLS
+        from .contracts import DEFAULT_SUBGRAPH_URLS
+        if chain_id in DEFAULT_SUBGRAPH_URLS:
+            return DEFAULT_SUBGRAPH_URLS[chain_id]
+
+        # 3. Check environment variable
+        env_key = f"SUBGRAPH_URL_{chain_id}"
+        env_url = os.environ.get(env_key)
+        if env_url:
+            logger.info(f"Using subgraph URL from environment: {env_key}={env_url}")
+            return env_url
+
+        # 4. Not found
+        return None
+
+    def _get_all_configured_chains(self) -> List[int]:
+        """
+        Get list of all chains that have subgraphs configured.
+
+        This is used when params.chains is None (query all available chains).
+        """
+        import os
+        from .contracts import DEFAULT_SUBGRAPH_URLS
+
+        chains = set()
+
+        # Add chains from DEFAULT_SUBGRAPH_URLS
+        chains.update(DEFAULT_SUBGRAPH_URLS.keys())
+
+        # Add chains from constructor overrides
+        chains.update(self.subgraph_url_overrides.keys())
+
+        # Add chains from environment variables
+        for key, value in os.environ.items():
+            if key.startswith("SUBGRAPH_URL_") and value:
+                try:
+                    chain_id = int(key.replace("SUBGRAPH_URL_", ""))
+                    chains.add(chain_id)
+                except ValueError:
+                    pass
+
+        return sorted(list(chains))
+
+    def _apply_cross_chain_filters(
+        self,
+        agents: List[Dict[str, Any]],
+        params: SearchParams
+    ) -> List[Dict[str, Any]]:
+        """
+        Apply filters that couldn't be expressed in subgraph WHERE clause.
+
+        Most filters are already applied by the subgraph query, but some
+        (like supportedTrust, mcpTools, etc.) need post-processing.
+        """
+        filtered = agents
+
+        # Filter by supportedTrust (if specified)
+        if params.supportedTrust is not None:
+            filtered = [
+                agent for agent in filtered
+                if any(
+                    trust in agent.get('registrationFile', {}).get('supportedTrusts', [])
+                    for trust in params.supportedTrust
+                )
+            ]
+
+        # Filter by mcpTools (if specified)
+        if params.mcpTools is not None:
+            filtered = [
+                agent for agent in filtered
+                if any(
+                    tool in agent.get('registrationFile', {}).get('mcpTools', [])
+                    for tool in params.mcpTools
+                )
+            ]
+
+        # Filter by a2aSkills (if specified)
+        if params.a2aSkills is not None:
+            filtered = [
+                agent for agent in filtered
+                if any(
+                    skill in agent.get('registrationFile', {}).get('a2aSkills', [])
+                    for skill in params.a2aSkills
+                )
+            ]
+
+        # Filter by mcpPrompts (if specified)
+        if params.mcpPrompts is not None:
+            filtered = [
+                agent for agent in filtered
+                if any(
+                    prompt in agent.get('registrationFile', {}).get('mcpPrompts', [])
+                    for prompt in params.mcpPrompts
+                )
+            ]
+
+        # Filter by mcpResources (if specified)
+        if params.mcpResources is not None:
+            filtered = [
+                agent for agent in filtered
+                if any(
+                    resource in agent.get('registrationFile', {}).get('mcpResources', [])
+                    for resource in params.mcpResources
+                )
+            ]
+
+        return filtered
+
+    def _deduplicate_agents_cross_chain(
+        self,
+        agents: List[Dict[str, Any]],
+        params: SearchParams
+    ) -> List[Dict[str, Any]]:
+        """
+        Deduplicate agents across chains (if requested).
+
+        Strategy:
+        - By default, DON'T deduplicate (agents on different chains are different entities)
+        - If params.deduplicate_cross_chain=True, deduplicate by (owner, registration_hash)
+
+        When deduplicating:
+        - Keep the first instance encountered
+        - Add 'deployedOn' array with all chain IDs where this agent exists
+        """
+        # Check if deduplication requested
+        if not params.deduplicate_cross_chain:
+            return agents
+
+        # Group agents by identity key
+        seen = {}
+        deduplicated = []
+
+        for agent in agents:
+            # Create identity key: (owner, name, description)
+            # This identifies "the same agent" across chains
+            owner = agent.get('owner', '').lower()
+            reg_file = agent.get('registrationFile', {})
+            name = reg_file.get('name', '')
+            description = reg_file.get('description', '')
+
+            identity_key = (owner, name, description)
+
+            if identity_key not in seen:
+                # First time seeing this agent
+                seen[identity_key] = agent
+
+                # Add deployedOn array
+                agent['deployedOn'] = [agent['chainId']]
+
+                deduplicated.append(agent)
+            else:
+                # Already seen this agent on another chain
+                # Add this chain to deployedOn array
+                seen[identity_key]['deployedOn'].append(agent['chainId'])
+
+        logger.info(
+            f"Deduplication: {len(agents)} agents → {len(deduplicated)} unique agents"
+        )
+
+        return deduplicated
+
+    def _sort_agents_cross_chain(
+        self,
+        agents: List[Dict[str, Any]],
+        sort: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Sort agents from multiple chains.
+
+        Supports sorting by:
+        - createdAt (timestamp)
+        - updatedAt (timestamp)
+        - totalFeedback (count)
+        - name (alphabetical)
+        - averageScore (reputation, if available)
+        """
+        if not sort or len(sort) == 0:
+            # Default: sort by createdAt descending (newest first)
+            return sorted(
+                agents,
+                key=lambda a: a.get('createdAt', 0),
+                reverse=True
+            )
+
+        # Parse first sort specification
+        sort_spec = sort[0]
+        if ':' in sort_spec:
+            field, direction = sort_spec.split(':', 1)
+        else:
+            field = sort_spec
+            direction = 'desc'
+
+        reverse = (direction.lower() == 'desc')
+
+        # Define sort key function
+        def get_sort_key(agent: Dict[str, Any]):
+            if field == 'createdAt':
+                return agent.get('createdAt', 0)
+
+            elif field == 'updatedAt':
+                return agent.get('updatedAt', 0)
+
+            elif field == 'totalFeedback':
+                return agent.get('totalFeedback', 0)
+
+            elif field == 'name':
+                reg_file = agent.get('registrationFile', {})
+                return reg_file.get('name', '').lower()
+
+            elif field == 'averageScore':
+                # If reputation search was done, averageScore may be available
+                return agent.get('averageScore', 0)
+
+            else:
+                logger.warning(f"Unknown sort field: {field}, defaulting to createdAt")
+                return agent.get('createdAt', 0)
+
+        return sorted(agents, key=get_sort_key, reverse=reverse)
+
+    def _parse_multi_chain_cursor(self, cursor: Optional[str]) -> Dict[int, int]:
+        """
+        Parse multi-chain cursor into per-chain offsets.
+
+        Cursor format (JSON):
+        {
+            "11155111": 50,  # Ethereum Sepolia offset
+            "84532": 30,     # Base Sepolia offset
+            "_global_offset": 100  # Total items returned so far
+        }
+
+        Returns:
+            Dict mapping chainId → offset (default 0)
+        """
+        if not cursor:
+            return {}
+
+        try:
+            cursor_data = json.loads(cursor)
+
+            # Validate format
+            if not isinstance(cursor_data, dict):
+                logger.warning(f"Invalid cursor format: {cursor}, using empty")
+                return {}
+
+            return cursor_data
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse cursor: {e}, using empty")
+            return {}
+
+    def _create_multi_chain_cursor(
+        self,
+        global_offset: int,
+    ) -> str:
+        """
+        Create multi-chain cursor for next page.
+
+        Args:
+            global_offset: Total items returned so far
+
+        Returns:
+            JSON string cursor
+        """
+        cursor_data = {
+            "_global_offset": global_offset
+        }
+
+        return json.dumps(cursor_data)
+
+    def _extract_order_by(self, sort: List[str]) -> str:
+        """Extract order_by field from sort specification."""
+        if not sort or len(sort) == 0:
+            return "createdAt"
+
+        sort_spec = sort[0]
+        if ':' in sort_spec:
+            field, _ = sort_spec.split(':', 1)
+            return field
+        return sort_spec
+
+    def _extract_order_direction(self, sort: List[str]) -> str:
+        """Extract order direction from sort specification."""
+        if not sort or len(sort) == 0:
+            return "desc"
+
+        sort_spec = sort[0]
+        if ':' in sort_spec:
+            _, direction = sort_spec.split(':', 1)
+            return direction
+        return "desc"
