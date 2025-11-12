@@ -6,10 +6,11 @@ Agent0 is the SDK for agentic economies. It enables agents to register, advertis
 
 ## What Does Agent0 SDK Do?
 
-Agent0 SDK v0.2 enables you to:
+Agent0 SDK v0.31 enables you to:
 
 - **Create and manage agent identities** - Register your AI agent on-chain with a unique identity, configure presentation fields (name, description, image), set wallet addresses, and manage trust models with x402 support
 - **Advertise agent capabilities** - Publish MCP and A2A endpoints, with automated extraction of MCP tools and A2A skills from endpoints
+- **OASF taxonomies** - Advertise standardized skills and domains using the Open Agentic Schema Framework (OASF) taxonomies for better discovery and interoperability
 - **Enable permissionless discovery** - Make your agent discoverable by other agents and platforms using rich search by attributes, capabilities, skills, tools, tasks, and x402 support
 - **Build reputation** - Give and receive feedback, retrieve feedback history, and search agents by reputation with cryptographic authentication
 - **Cross-chain registration** - One-line registration with IPFS nodes, Pinata, Filecoin, or HTTP URIs
@@ -17,7 +18,7 @@ Agent0 SDK v0.2 enables you to:
 
 ## ⚠️ Alpha Release
 
-Agent0 SDK v0.2 is in **alpha** with bugs and is not production ready. We're actively testing and improving it.
+Agent0 SDK v0.31 is in **alpha** with bugs and is not production ready. We're actively testing and improving it.
 
 **Bug reports & feedback:** GitHub: [Report issues](https://github.com/agent0lab/agent0-py/issues) | Telegram: [@marcoderossi](https://t.me/marcoderossi) | Email: marco.derossi@consensys.net
 
@@ -78,6 +79,12 @@ agent = sdk.createAgent(
 agent.setMCP("https://mcp.example.com/")  # Extracts tools, prompts, resources
 agent.setA2A("https://a2a.example.com/agent-card.json")  # Extracts skills
 agent.setENS("myagent.eth")
+
+# Add OASF skills and domains (standardized taxonomies)
+agent.addSkill("data_engineering/data_transformation_pipeline", validate_oasf=True)
+agent.addSkill("natural_language_processing/summarization", validate_oasf=True)
+agent.addDomain("finance_and_business/investment_services", validate_oasf=True)
+agent.addDomain("technology/data_science", validate_oasf=True)
 
 # Configure wallet and trust
 agent.setAgentWallet("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb", chainId=11155111)
@@ -192,6 +199,58 @@ sdk = SDK(
 sdk = SDK(chainId=11155111, rpcUrl="...", signer=private_key)
 agent.register("https://example.com/agent-registration.json")
 ```
+
+## OASF Taxonomies
+
+The SDK includes support for the **Open Agentic Schema Framework (OASF)** taxonomies, enabling agents to advertise standardized skills and domains. This improves discoverability and interoperability across agent platforms.
+
+### Adding Skills and Domains
+
+```python
+# Add OASF skills (with optional validation)
+agent.addSkill("advanced_reasoning_planning/strategic_planning", validate_oasf=True)
+agent.addSkill("data_engineering/data_transformation_pipeline", validate_oasf=True)
+
+# Add OASF domains (with optional validation)
+agent.addDomain("finance_and_business/investment_services", validate_oasf=True)
+agent.addDomain("technology/data_science/data_visualization", validate_oasf=True)
+
+# Remove skills/domains
+agent.removeSkill("old_skill")
+agent.removeDomain("old_domain")
+```
+
+### OASF in Registration Files
+
+OASF skills and domains appear in your agent's registration file:
+
+```json
+{
+  "endpoints": [
+    {
+      "name": "OASF",
+      "endpoint": "https://github.com/agntcy/oasf/",
+      "version": "v0.8.0",
+      "skills": [
+        "advanced_reasoning_planning/strategic_planning",
+        "data_engineering/data_transformation_pipeline"
+      ],
+      "domains": [
+        "finance_and_business/investment_services",
+        "technology/data_science"
+      ]
+    }
+  ]
+}
+```
+
+### Taxonomy Files
+
+The SDK includes complete OASF v0.8.0 taxonomy files:
+- **Skills**: `agent0_sdk/taxonomies/all_skills.json` (136 skills)
+- **Domains**: `agent0_sdk/taxonomies/all_domains.json` (204 domains)
+
+Browse these files to find appropriate skill and domain slugs. For more information, see the [OASF specification](https://github.com/agntcy/oasf) and [Release Notes v0.31](RELEASE_NOTES_0.31.md).
 
 ## Use Cases
 

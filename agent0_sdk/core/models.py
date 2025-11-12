@@ -28,6 +28,7 @@ class EndpointType(Enum):
     ENS = "ENS"
     DID = "DID"
     WALLET = "wallet"
+    OASF = "OASF"
 
 
 class TrustModel(Enum):

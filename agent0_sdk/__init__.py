@@ -30,7 +30,7 @@ except ImportError:
     Agent = None
     _sdk_available = False
 
-__version__ = "0.3rc1"
+__version__ = "0.31"
 __all__ = [
     "SDK",
     "Agent",

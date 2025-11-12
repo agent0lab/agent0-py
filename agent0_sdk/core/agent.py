@@ -16,6 +16,7 @@ from .models import (
 )
 from .web3_client import Web3Client
 from .endpoint_crawler import EndpointCrawler
+from .oasf_validator import validate_skill, validate_domain
 
 if TYPE_CHECKING:
     from .sdk import SDK
@@ -315,6 +316,137 @@ class Agent:
     def removeEndpoints(self) -> 'Agent':
         """Remove all endpoints."""
         return self.removeEndpoint()
+
+    # OASF endpoint management
+    def _get_or_create_oasf_endpoint(self) -> Endpoint:
+        """Get existing OASF endpoint or create a new one with default values."""
+        # Find existing OASF endpoint
+        for ep in self.registration_file.endpoints:
+            if ep.type == EndpointType.OASF:
+                return ep
+        
+        # Create new OASF endpoint with default values
+        oasf_endpoint = Endpoint(
+            type=EndpointType.OASF,
+            value="https://github.com/agntcy/oasf/",
+            meta={"version": "v0.8.0", "skills": [], "domains": []}
+        )
+        self.registration_file.endpoints.append(oasf_endpoint)
+        return oasf_endpoint
+
+    def addSkill(self, slug: str, validate_oasf: bool = False) -> 'Agent':
+        """
+        Add a skill to the OASF endpoint.
+        
+        Args:
+            slug: The skill slug to add (e.g., "natural_language_processing/summarization")
+            validate_oasf: If True, validate the slug against the OASF taxonomy (default: False)
+        
+        Returns:
+            self for method chaining
+        
+        Raises:
+            ValueError: If validate_oasf=True and the slug is not valid
+        """
+        if validate_oasf:
+            if not validate_skill(slug):
+                raise ValueError(
+                    f"Invalid OASF skill slug: {slug}. "
+                    "Use validate_oasf=False to skip validation."
+                )
+        
+        oasf_endpoint = self._get_or_create_oasf_endpoint()
+        
+        # Initialize skills array if missing
+        if "skills" not in oasf_endpoint.meta:
+            oasf_endpoint.meta["skills"] = []
+        
+        # Add slug if not already present (avoid duplicates)
+        skills = oasf_endpoint.meta["skills"]
+        if slug not in skills:
+            skills.append(slug)
+        
+        self.registration_file.updatedAt = int(time.time())
+        return self
+
+    def removeSkill(self, slug: str) -> 'Agent':
+        """
+        Remove a skill from the OASF endpoint.
+        
+        Args:
+            slug: The skill slug to remove
+        
+        Returns:
+            self for method chaining
+        """
+        # Find OASF endpoint
+        for ep in self.registration_file.endpoints:
+            if ep.type == EndpointType.OASF:
+                if "skills" in ep.meta and isinstance(ep.meta["skills"], list):
+                    skills = ep.meta["skills"]
+                    if slug in skills:
+                        skills.remove(slug)
+                self.registration_file.updatedAt = int(time.time())
+                break
+        
+        return self
+
+    def addDomain(self, slug: str, validate_oasf: bool = False) -> 'Agent':
+        """
+        Add a domain to the OASF endpoint.
+        
+        Args:
+            slug: The domain slug to add (e.g., "finance_and_business/investment_services")
+            validate_oasf: If True, validate the slug against the OASF taxonomy (default: False)
+        
+        Returns:
+            self for method chaining
+        
+        Raises:
+            ValueError: If validate_oasf=True and the slug is not valid
+        """
+        if validate_oasf:
+            if not validate_domain(slug):
+                raise ValueError(
+                    f"Invalid OASF domain slug: {slug}. "
+                    "Use validate_oasf=False to skip validation."
+                )
+        
+        oasf_endpoint = self._get_or_create_oasf_endpoint()
+        
+        # Initialize domains array if missing
+        if "domains" not in oasf_endpoint.meta:
+            oasf_endpoint.meta["domains"] = []
+        
+        # Add slug if not already present (avoid duplicates)
+        domains = oasf_endpoint.meta["domains"]
+        if slug not in domains:
+            domains.append(slug)
+        
+        self.registration_file.updatedAt = int(time.time())
+        return self
+
+    def removeDomain(self, slug: str) -> 'Agent':
+        """
+        Remove a domain from the OASF endpoint.
+        
+        Args:
+            slug: The domain slug to remove
+        
+        Returns:
+            self for method chaining
+        """
+        # Find OASF endpoint
+        for ep in self.registration_file.endpoints:
+            if ep.type == EndpointType.OASF:
+                if "domains" in ep.meta and isinstance(ep.meta["domains"], list):
+                    domains = ep.meta["domains"]
+                    if slug in domains:
+                        domains.remove(slug)
+                self.registration_file.updatedAt = int(time.time())
+                break
+        
+        return self
 
     # Trust models
     def setTrust(
