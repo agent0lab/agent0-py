@@ -182,7 +182,7 @@ class FeedbackManager:
         
         # Prepare feedback auth (use provided auth or create new one)
         if feedbackAuth is None:
-            feedbackAuth = self.sign_feedbackAuth(
+            feedbackAuth = self.signFeedbackAuth(
                 agentId=agentId,
                 clientAddress=clientAddress,
                 indexLimit=feedbackIndex,
