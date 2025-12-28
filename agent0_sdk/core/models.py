@@ -90,14 +90,19 @@ class RegistrationFile:
         
         # Add walletAddress as an endpoint if present
         if self.walletAddress:
-            # Use stored walletChainId if available, otherwise extract from agentId
-            chain_id_for_wallet = self.walletChainId
+            # Prefer explicit walletChainId, then provided chain_id, then parse from agentId
+            chain_id_for_wallet = self.walletChainId or chain_id
             if chain_id_for_wallet is None:
-                # Extract chain ID from agentId if available, otherwise use 1 as default
                 chain_id_for_wallet = 1  # Default to mainnet
-                if self.agentId and ":" in self.agentId:
+                if self.agentId:
+                    parts = self.agentId.split(":")
                     try:
-                        chain_id_for_wallet = int(self.agentId.split(":")[1])
+                        # Internal AgentId format: "chainId:tokenId"
+                        if len(parts) == 2:
+                            chain_id_for_wallet = int(parts[0])
+                        # CAIP-style AgentId: "eip155:chainId:tokenId"
+                        elif len(parts) >= 3 and parts[0] == "eip155":
+                            chain_id_for_wallet = int(parts[1])
                     except (ValueError, IndexError):
                         chain_id_for_wallet = 1
             
