@@ -80,6 +80,36 @@ class TestSDK:
             assert sdk.chainId == 84532
             assert sdk._registries["IDENTITY"] is not None  # Should have Base Sepolia registry
 
+    def test_load_agent_with_empty_token_uri_returns_partial_agent(self):
+        """If tokenURI is empty on-chain, loadAgent should return a partial Agent (no crash)."""
+        with patch('agent0_sdk.core.sdk.Web3Client') as mock_web3:
+            # Mock web3 client and contract calls
+            web3_instance = mock_web3.return_value
+            web3_instance.get_contract.return_value = Mock()
+
+            # tokenURI -> "" (missing), ownerOf -> address, metadata -> empty bytes
+            def call_contract_side_effect(contract, fn_name, *args):
+                if fn_name == "tokenURI":
+                    return ""
+                if fn_name == "ownerOf":
+                    return "0x1234567890abcdef1234567890abcdef12345678"
+                if fn_name == "getMetadata":
+                    return b""
+                raise AssertionError(f"Unexpected contract call: {fn_name} args={args}")
+
+            web3_instance.call_contract.side_effect = call_contract_side_effect
+
+            sdk = SDK(
+                chainId=11155111,
+                signer="0x1234567890abcdef",
+                rpcUrl="https://eth-sepolia.g.alchemy.com/v2/test"
+            )
+
+            agent = sdk.loadAgent("11155111:1")
+            assert agent.agentId == "11155111:1"
+            assert agent.agentURI is None
+            assert agent.owners == ["0x1234567890abcdef1234567890abcdef12345678"]
+
 
 class TestAgent:
     """Test Agent class."""

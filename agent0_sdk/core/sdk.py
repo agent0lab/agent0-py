@@ -278,7 +278,12 @@ class SDK:
         return Agent(sdk=self, registration_file=registration_file)
 
     def loadAgent(self, agentId: AgentId) -> Agent:
-        """Load an existing agent (hydrates from registration file if registered)."""
+        """Load an existing agent (hydrates from registration file if registered).
+        
+        Note: Agents can be minted with an empty token URI (e.g. IPFS flow where publish fails).
+        In that case we return a partially-hydrated Agent with an empty registration file so the
+        caller can resume publishing and set the URI later.
+        """
         # Convert agentId to string if it's an integer
         agentId = str(agentId)
         
@@ -298,10 +303,16 @@ class SDK:
         except Exception as e:
             raise ValueError(f"Failed to load agent {agentId}: {e}")
         
-        # Load registration file
+        # Load registration file (or fall back to a minimal file if token URI is missing)
         registration_file = self._load_registration_file(token_uri)
         registration_file.agentId = agentId
         registration_file.agentURI = token_uri if token_uri else None
+
+        if not token_uri or not str(token_uri).strip():
+            logger.warning(
+                f"Agent {agentId} has no tokenURI set on-chain yet. "
+                "Returning a partial agent; update info and call registerIPFS() to publish and set URI."
+            )
         
         # Store registry address for proper JSON generation
         registry_address = self._registries.get("IDENTITY")
@@ -315,7 +326,13 @@ class SDK:
         return Agent(sdk=self, registration_file=registration_file)
 
     def _load_registration_file(self, uri: str) -> RegistrationFile:
-        """Load registration file from URI."""
+        """Load registration file from URI.
+        
+        If uri is empty/None/whitespace, returns an empty RegistrationFile to allow resume flows.
+        """
+        if not uri or not str(uri).strip():
+            return RegistrationFile()
+
         if uri.startswith("ipfs://"):
             if not self.ipfs_client:
                 raise ValueError("IPFS client not configured")

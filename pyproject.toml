@@ -64,6 +64,9 @@ Documentation = "https://sdk.ag0.xyz"
 [tool.setuptools.packages.find]
 where = ["."]
 
+[tool.setuptools.package-data]
+agent0_sdk = ["taxonomies/*.json"]
+
 [tool.black]
 line-length = 88
 target-version = ['py38']
