@@ -64,7 +64,7 @@ def validate_skill(slug: str) -> bool:
     Validate if a skill slug exists in the OASF taxonomy.
     
     Args:
-        slug: The skill slug to validate (e.g., "natural_language_processing/summarization")
+        slug: The skill slug to validate (e.g., "natural_language_processing/natural_language_generation/summarization")
     
     Returns:
         True if the skill exists in the taxonomy, False otherwise

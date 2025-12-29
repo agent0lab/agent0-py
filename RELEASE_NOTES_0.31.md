@@ -9,7 +9,7 @@ This release introduces comprehensive support for the **Open Agentic Schema Fram
 ### OASF Endpoint Support
 
 Agents can now advertise their capabilities using the OASF taxonomy system, which provides standardized classifications for:
-- **Skills**: Specific capabilities agents can perform (e.g., `natural_language_processing/summarization`, `data_engineering/data_transformation_pipeline`)
+- **Skills**: Specific capabilities agents can perform (e.g., `natural_language_processing/natural_language_generation/summarization`, `data_engineering/data_transformation_pipeline`)
 - **Domains**: Fields of application and knowledge areas (e.g., `finance_and_business/investment_services`, `healthcare/telemedicine`)
 
 ### OASF in Registration Files
@@ -100,8 +100,8 @@ All methods support chaining for convenient configuration:
 
 ```python
 agent.addSkill("data_engineering/data_transformation_pipeline", validate_oasf=True)\
-     .addDomain("technology/data_science", validate_oasf=True)\
-     .addSkill("natural_language_processing/summarization", validate_oasf=True)\
+     .addDomain("technology/data_science/data_science", validate_oasf=True)\
+     .addSkill("natural_language_processing/natural_language_generation/summarization", validate_oasf=True)\
      .removeSkill("old_skill")
 ```
 

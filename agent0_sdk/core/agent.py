@@ -339,7 +339,7 @@ class Agent:
         Add a skill to the OASF endpoint.
         
         Args:
-            slug: The skill slug to add (e.g., "natural_language_processing/summarization")
+            slug: The skill slug to add (e.g., "natural_language_processing/natural_language_generation/summarization")
             validate_oasf: If True, validate the slug against the OASF taxonomy (default: False)
         
         Returns:
