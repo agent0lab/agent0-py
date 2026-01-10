@@ -40,60 +40,6 @@ class FeedbackManager:
         self.subgraph_client = subgraph_client
         self.indexer = indexer
 
-    def signFeedbackAuth(
-        self,
-        agentId: AgentId,
-        clientAddress: Address,
-        indexLimit: Optional[int] = None,
-        expiryHours: int = 24,
-    ) -> bytes:
-        """Sign feedback authorization for a client."""
-        # Parse agent ID to get token ID
-        if ":" in agentId:
-            tokenId = int(agentId.split(":")[-1])
-        else:
-            tokenId = int(agentId)
-        
-        # Get current feedback index if not provided
-        if indexLimit is None:
-            try:
-                lastIndex = self.web3_client.call_contract(
-                    self.reputation_registry,
-                    "getLastIndex",
-                    tokenId,
-                    clientAddress
-                )
-                indexLimit = lastIndex + 1
-            except Exception as e:
-                # If we can't get the index, default to 1 (for first feedback)
-                indexLimit = 1
-        
-        # Calculate expiry timestamp
-        expiry = int(time.time()) + (expiryHours * 3600)
-        
-        # Encode feedback auth data
-        authData = self.web3_client.encodeFeedbackAuth(
-            agentId=tokenId,
-            clientAddress=clientAddress,
-            indexLimit=indexLimit,
-            expiry=expiry,
-            chainId=self.web3_client.chain_id,
-            identityRegistry=self.identity_registry.address if self.identity_registry else "0x0",
-            signerAddress=self.web3_client.account.address
-        )
-        
-        # Hash the encoded data first (matching contract's keccak256(abi.encode(...)))
-        messageHash = self.web3_client.w3.keccak(authData)
-        
-        # Sign the hash with Ethereum signed message prefix (matching contract's .toEthSignedMessageHash())
-        from eth_account.messages import encode_defunct
-        signableMessage = encode_defunct(primitive=messageHash)
-        signedMessage = self.web3_client.account.sign_message(signableMessage)
-        signature = signedMessage.signature
-        
-        # Combine auth data and signature
-        return authData + signature
-
     def prepareFeedback(
         self,
         agentId: AgentId,
@@ -104,6 +50,8 @@ class FeedbackManager:
         name: Optional[str] = None,
         skill: Optional[str] = None,
         task: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        domain: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
         proofOfPayment: Optional[Dict[str, Any]] = None,
         extra: Optional[Dict[str, Any]] = None,
@@ -128,12 +76,13 @@ class FeedbackManager:
             "agentId": tokenId,
             "clientAddress": f"eip155:{self.web3_client.chain_id}:{self.web3_client.account.address}",
             "createdAt": createdAt,
-            "feedbackAuth": "",  # Will be filled when giving feedback
             "score": int(score) if score else 0,  # Score as integer (0-100)
             
             # MAY FIELDS
             "tag1": tags[0] if tags else None,
             "tag2": tags[1] if len(tags) > 1 else None,
+            "endpoint": endpoint,
+            "domain": domain,
             "skill": skill,
             "context": context,
             "task": task,
@@ -155,7 +104,6 @@ class FeedbackManager:
         agentId: AgentId,
         feedbackFile: Dict[str, Any],
         idem: Optional[IdemKey] = None,
-        feedbackAuth: Optional[bytes] = None,
     ) -> Feedback:
         """Give feedback (maps 8004 endpoint)."""
         # Parse agent ID
@@ -180,22 +128,11 @@ class FeedbackManager:
         except Exception as e:
             raise ValueError(f"Failed to get feedback index: {e}")
         
-        # Prepare feedback auth (use provided auth or create new one)
-        if feedbackAuth is None:
-            feedbackAuth = self.signFeedbackAuth(
-                agentId=agentId,
-                clientAddress=clientAddress,
-                indexLimit=feedbackIndex,
-                expiryHours=24
-            )
-        
-        # Update feedback file with auth
-        feedbackFile["feedbackAuth"] = feedbackAuth.hex()
-        
-        # Prepare on-chain data (only basic fields, no capability/endpoint)
+        # Prepare on-chain data
         score = feedbackFile.get("score", 0)  # Already in 0-100 range
-        tag1 = self._stringToBytes32(feedbackFile.get("tag1", ""))
-        tag2 = self._stringToBytes32(feedbackFile.get("tag2", ""))
+        tag1 = feedbackFile.get("tag1", "") or ""
+        tag2 = feedbackFile.get("tag2", "") or ""
+        endpoint = feedbackFile.get("endpoint", "") or ""
         
         # Handle off-chain file storage
         feedbackUri = ""
@@ -216,7 +153,7 @@ class FeedbackManager:
             # If we have rich data but no IPFS, we need to store it somewhere
             raise ValueError("Rich feedback data requires IPFS client for storage")
         
-        # Submit to blockchain
+        # Submit to blockchain with new signature: giveFeedback(agentId, score, tag1, tag2, endpoint, feedbackURI, feedbackHash)
         try:
             txHash = self.web3_client.transact_contract(
                 self.reputation_registry,
@@ -225,9 +162,9 @@ class FeedbackManager:
                 score,
                 tag1,
                 tag2,
+                endpoint,
                 feedbackUri,
-                feedbackHash,
-                feedbackAuth
+                feedbackHash
             )
             
             # Wait for transaction confirmation
@@ -244,11 +181,12 @@ class FeedbackManager:
             agentId=agentId,
             reviewer=clientAddress,  # create_id normalizes the ID; reviewer field can remain as-is
             score=int(score) if score and score > 0 else None,
-            tags=[feedbackFile.get("tag1"), feedbackFile.get("tag2")] if feedbackFile.get("tag1") else [],
+            tags=[tag1, tag2] if tag1 or tag2 else [],
             text=feedbackFile.get("text"),
             context=feedbackFile.get("context"),
             proofOfPayment=feedbackFile.get("proofOfPayment"),
             fileURI=feedbackUri if feedbackUri else None,
+            endpoint=endpoint if endpoint else None,
             createdAt=int(time.time()),
             isRevoked=False,
             # Off-chain only fields
@@ -265,17 +203,21 @@ class FeedbackManager:
         feedbackIndex: int,
     ) -> Feedback:
         """Get single feedback with responses from subgraph or blockchain."""
-        # Use indexer for subgraph queries (unified search interface)
+        # Prefer subgraph/indexer for richer data, but fall back to chain when subgraph is behind
         if self.indexer and self.subgraph_client:
-            # Indexer handles subgraph queries for unified search architecture
-            # This enables future semantic search capabilities
-            return self.indexer.get_feedback(agentId, clientAddress, feedbackIndex)
-        
-        # Fallback: direct subgraph access (if indexer not available)
+            try:
+                return self.indexer.get_feedback(agentId, clientAddress, feedbackIndex)
+            except Exception as e:
+                logger.debug(f"Indexer/subgraph get_feedback failed, falling back to blockchain: {e}")
+                return self._get_feedback_from_blockchain(agentId, clientAddress, feedbackIndex)
+
         if self.subgraph_client:
-            return self._get_feedback_from_subgraph(agentId, clientAddress, feedbackIndex)
-        
-        # Fallback to blockchain (direct contract query)
+            try:
+                return self._get_feedback_from_subgraph(agentId, clientAddress, feedbackIndex)
+            except Exception as e:
+                logger.debug(f"Subgraph get feedback failed, falling back to blockchain: {e}")
+                return self._get_feedback_from_blockchain(agentId, clientAddress, feedbackIndex)
+
         return self._get_feedback_from_blockchain(agentId, clientAddress, feedbackIndex)
     
     def _get_feedback_from_subgraph(
@@ -320,24 +262,14 @@ class FeedbackManager:
                     'createdAt': resp.get('createdAt')
                 })
             
-            # Map tags - check if they're hex bytes32 or plain strings
-            tags = []
+            # Map tags: rely on whatever the subgraph returns (may be legacy bytes/hash-like values)
+            tags: List[str] = []
             tag1 = feedback_data.get('tag1') or feedback_file.get('tag1')
             tag2 = feedback_data.get('tag2') or feedback_file.get('tag2')
-            
-            # Convert hex bytes32 to readable tags
-            if tag1 or tag2:
-                tags = self._hexBytes32ToTags(
-                    tag1 if isinstance(tag1, str) else "",
-                    tag2 if isinstance(tag2, str) else ""
-                )
-            
-            # If conversion failed, try as plain strings
-            if not tags:
-                if tag1 and not tag1.startswith("0x"):
-                    tags.append(tag1)
-                if tag2 and not tag2.startswith("0x"):
-                    tags.append(tag2)
+            if isinstance(tag1, str) and tag1:
+                tags.append(tag1)
+            if isinstance(tag2, str) and tag2:
+                tags.append(tag2)
             
             return Feedback(
                 id=Feedback.create_id(agentId, clientAddress, feedbackIndex),  # create_id now normalizes
@@ -354,7 +286,8 @@ class FeedbackManager:
                     'chainId': feedback_file.get('proofOfPaymentChainId'),
                     'txHash': feedback_file.get('proofOfPaymentTxHash'),
                 } if feedback_file.get('proofOfPaymentFromAddress') else None,
-                fileURI=feedback_data.get('feedbackUri'),
+                fileURI=feedback_data.get('feedbackURI') or feedback_data.get('feedbackUri'),  # Handle both old and new field names
+                endpoint=feedback_data.get('endpoint'),
                 createdAt=feedback_data.get('createdAt', int(time.time())),
                 answers=answers,
                 isRevoked=feedback_data.get('isRevoked', False),
@@ -380,7 +313,7 @@ class FeedbackManager:
             tokenId = int(agentId)
         
         try:
-            # Read from blockchain
+            # Read from blockchain - new signature: readFeedback(agentId, clientAddress, feedbackIndex)
             result = self.web3_client.call_contract(
                 self.reputation_registry,
                 "readFeedback",
@@ -395,17 +328,25 @@ class FeedbackManager:
             normalized_address = self.web3_client.normalize_address(clientAddress)
             feedbackId = Feedback.create_id(agentId, normalized_address, feedbackIndex)
             
+            # Tags are now strings, not bytes32
+            tags = []
+            if tag1:
+                tags.append(tag1)
+            if tag2:
+                tags.append(tag2)
+            
             return Feedback(
                 id=feedbackId,
                 agentId=agentId,
                 reviewer=normalized_address,
                 score=int(score) if score and score > 0 else None,
-                tags=self._bytes32ToTags(tag1, tag2),
+                tags=tags,
                 text=None,  # Not stored on-chain
                 capability=None,  # Not stored on-chain
                 context=None,  # Not stored on-chain
                 proofOfPayment=None,  # Not stored on-chain
                 fileURI=None,  # Would need to be retrieved separately
+                endpoint=None,  # Not stored on-chain in readFeedback
                 createdAt=int(time.time()),  # Not stored on-chain
                 isRevoked=is_revoked
             )
@@ -453,12 +394,12 @@ class FeedbackManager:
             tokenId = int(agentId)
         
         try:
-            # Prepare filter parameters
+            # Prepare filter parameters - tags are now strings
             client_list = clientAddresses if clientAddresses else []
-            tag1_filter = self._stringToBytes32(tags[0] if tags else "")
-            tag2_filter = self._stringToBytes32(tags[1] if tags and len(tags) > 1 else "")
+            tag1_filter = tags[0] if tags else ""
+            tag2_filter = tags[1] if tags and len(tags) > 1 else ""
             
-            # Read from blockchain
+            # Read from blockchain - new signature returns: (clientAddresses, feedbackIndexes, scores, tag1s, tag2s, revokedStatuses)
             result = self.web3_client.call_contract(
                 self.reputation_registry,
                 "readAllFeedback",
@@ -469,19 +410,27 @@ class FeedbackManager:
                 include_revoked
             )
             
-            clients, scores, tag1s, tag2s, revoked_statuses = result
+            clients, feedback_indexes, scores, tag1s, tag2s, revoked_statuses = result
             
             # Convert to Feedback objects
             feedbacks = []
             for i in range(len(clients)):
-                feedbackId = Feedback.create_id(agentId, clients[i], i + 1)  # Assuming 1-indexed
+                feedback_index = int(feedback_indexes[i]) if i < len(feedback_indexes) else (i + 1)
+                feedbackId = Feedback.create_id(agentId, clients[i], feedback_index)
+                
+                # Tags are now strings
+                tags_list = []
+                if i < len(tag1s) and tag1s[i]:
+                    tags_list.append(tag1s[i])
+                if i < len(tag2s) and tag2s[i]:
+                    tags_list.append(tag2s[i])
                 
                 feedback = Feedback(
                     id=feedbackId,
                     agentId=agentId,
                     reviewer=clients[i],
                     score=int(scores[i]) if scores[i] and scores[i] > 0 else None,
-                    tags=self._bytes32ToTags(tag1s[i], tag2s[i]),
+                    tags=tags_list,
                     text=None,
                     capability=None,
                     endpoint=None,
@@ -489,7 +438,7 @@ class FeedbackManager:
                     proofOfPayment=None,
                     fileURI=None,
                     createdAt=int(time.time()),
-                    isRevoked=revoked_statuses[i]
+                    isRevoked=revoked_statuses[i] if i < len(revoked_statuses) else False
                 )
                 feedbacks.append(feedback)
             
@@ -555,24 +504,14 @@ class FeedbackManager:
                     'createdAt': resp.get('createdAt')
                 })
             
-            # Map tags - check if they're hex bytes32 or plain strings
-            tags_list = []
+            # Map tags: rely on whatever the subgraph returns (may be legacy bytes/hash-like values)
+            tags_list: List[str] = []
             tag1 = fb_data.get('tag1') or feedback_file.get('tag1')
             tag2 = fb_data.get('tag2') or feedback_file.get('tag2')
-            
-            # Convert hex bytes32 to readable tags
-            if tag1 or tag2:
-                tags_list = self._hexBytes32ToTags(
-                    tag1 if isinstance(tag1, str) else "",
-                    tag2 if isinstance(tag2, str) else ""
-                )
-            
-            # If conversion failed, try as plain strings
-            if not tags_list:
-                if tag1 and not tag1.startswith("0x"):
-                    tags_list.append(tag1)
-                if tag2 and not tag2.startswith("0x"):
-                    tags_list.append(tag2)
+            if isinstance(tag1, str) and tag1:
+                tags_list.append(tag1)
+            if isinstance(tag2, str) and tag2:
+                tags_list.append(tag2)
             
             # Parse agentId from feedback ID
             feedback_id = fb_data['id']
@@ -601,7 +540,8 @@ class FeedbackManager:
                     'chainId': feedback_file.get('proofOfPaymentChainId'),
                     'txHash': feedback_file.get('proofOfPaymentTxHash'),
                 } if feedback_file.get('proofOfPaymentFromAddress') else None,
-                fileURI=fb_data.get('feedbackUri'),
+                fileURI=fb_data.get('feedbackURI') or fb_data.get('feedbackUri'),  # Handle both old and new field names
+                endpoint=fb_data.get('endpoint'),
                 createdAt=fb_data.get('createdAt', int(time.time())),
                 answers=answers,
                 isRevoked=fb_data.get('isRevoked', False),
@@ -682,7 +622,7 @@ class FeedbackManager:
                 tokenId,
                 clientAddress,
                 feedbackIndex,
-                responseUri,
+                responseUri,  # Note: contract uses responseURI but variable name kept for compatibility
                 responseHash
             )
             
@@ -750,16 +690,16 @@ class FeedbackManager:
         
         try:
             client_list = clientAddresses if clientAddresses else []
-            tag1_bytes = self._stringToBytes32(tag1) if tag1 else b"\x00" * 32
-            tag2_bytes = self._stringToBytes32(tag2) if tag2 else b"\x00" * 32
+            tag1_str = tag1 if tag1 else ""
+            tag2_str = tag2 if tag2 else ""
             
             result = self.web3_client.call_contract(
                 self.reputation_registry,
                 "getSummary",
                 tokenId,
                 client_list,
-                tag1_bytes,
-                tag2_bytes
+                tag1_str,
+                tag2_str
             )
             
             count, average_score = result
@@ -948,38 +888,27 @@ class FeedbackManager:
         
         return "|".join(key_parts)
 
-    def _stringToBytes32(self, text: str) -> bytes:
-        """Convert string to bytes32 for blockchain storage."""
-        if not text:
-            return b"\x00" * 32
+    def _normalizeTag(self, tag: str) -> str:
+        """Normalize string tag (trim, validate length if needed).
         
-        # Encode as UTF-8 and pad/truncate to 32 bytes
-        encoded = text.encode('utf-8')
-        if len(encoded) > 32:
-            encoded = encoded[:32]
-        else:
-            encoded = encoded.ljust(32, b'\x00')
-        
-        return encoded
-
-    def _bytes32ToTags(self, tag1: bytes, tag2: bytes) -> List[str]:
-        """Convert bytes32 tags back to strings."""
-        tags = []
-        
-        if tag1 and tag1 != b"\x00" * 32:
-            tag1_str = tag1.rstrip(b'\x00').decode('utf-8', errors='ignore')
-            if tag1_str:
-                tags.append(tag1_str)
-        
-        if tag2 and tag2 != b"\x00" * 32:
-            tag2_str = tag2.rstrip(b'\x00').decode('utf-8', errors='ignore')
-            if tag2_str:
-                tags.append(tag2_str)
-        
-        return tags
+        Args:
+            tag: Tag string to normalize
+            
+        Returns:
+            Normalized tag string
+        """
+        if not tag:
+            return ""
+        # Trim whitespace
+        normalized = tag.strip()
+        # Tags are now strings with no length limit, but we can validate if needed
+        return normalized
     
     def _hexBytes32ToTags(self, tag1: str, tag2: str) -> List[str]:
         """Convert hex bytes32 tags back to strings, or return plain strings as-is.
+        
+        DEPRECATED: This method is kept for backward compatibility with old data
+        that may have bytes32 tags. New tags are strings and don't need conversion.
         
         The subgraph now stores tags as human-readable strings (not hex),
         so this method handles both formats for backwards compatibility.

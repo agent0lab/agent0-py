@@ -5,7 +5,7 @@ Web3 integration layer for smart contract interactions.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 
 try:
     from web3 import Web3
@@ -123,22 +123,6 @@ class Web3Client:
         
         return event_filter.get_all_entries()
 
-    def encodeFeedbackAuth(
-        self,
-        agentId: int,
-        clientAddress: str,
-        indexLimit: int,
-        expiry: int,
-        chainId: int,
-        identityRegistry: str,
-        signerAddress: str
-    ) -> bytes:
-        """Encode feedback authorization data."""
-        return self.w3.codec.encode(
-            ['uint256', 'address', 'uint64', 'uint256', 'uint256', 'address', 'address'],
-            [agentId, clientAddress, indexLimit, expiry, chainId, identityRegistry, signerAddress]
-        )
-
     def signMessage(self, message: bytes) -> bytes:
         """Sign a message with the account's private key."""
         # Create a SignableMessage from the raw bytes
@@ -190,3 +174,186 @@ class Web3Client:
     def get_transaction_count(self, address: str) -> int:
         """Get transaction count (nonce) of an address."""
         return self.w3.eth.get_transaction_count(address)
+
+    def encodeEIP712Domain(
+        self,
+        name: str,
+        version: str,
+        chain_id: int,
+        verifying_contract: str
+    ) -> Dict[str, Any]:
+        """Encode EIP-712 domain separator.
+        
+        Args:
+            name: Contract name
+            version: Contract version
+            chain_id: Chain ID
+            verifying_contract: Contract address
+            
+        Returns:
+            Domain separator dictionary
+        """
+        return {
+            "name": name,
+            "version": version,
+            "chainId": chain_id,
+            "verifyingContract": verifying_contract
+        }
+
+    def build_agent_wallet_set_typed_data(
+        self,
+        agent_id: int,
+        new_wallet: str,
+        owner: str,
+        deadline: int,
+        verifying_contract: str,
+        chain_id: int,
+    ) -> Dict[str, Any]:
+        """Build EIP-712 typed data for ERC-8004 IdentityRegistry setAgentWallet.
+
+        Contract expects:
+        - domain: name="ERC8004IdentityRegistry", version="1"
+        - primaryType: "AgentWalletSet"
+        - message: { agentId, newWallet, owner, deadline }
+        """
+        domain = self.encodeEIP712Domain(
+            name="ERC8004IdentityRegistry",
+            version="1",
+            chain_id=chain_id,
+            verifying_contract=verifying_contract,
+        )
+
+        message_types = {
+            "AgentWalletSet": [
+                {"name": "agentId", "type": "uint256"},
+                {"name": "newWallet", "type": "address"},
+                {"name": "owner", "type": "address"},
+                {"name": "deadline", "type": "uint256"},
+            ]
+        }
+
+        message = {
+            "agentId": agent_id,
+            "newWallet": new_wallet,
+            "owner": owner,
+            "deadline": deadline,
+        }
+
+        # eth_account.messages.encode_typed_data expects the "full_message" format
+        return {
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"},
+                ],
+                **message_types,
+            },
+            "domain": domain,
+            "primaryType": "AgentWalletSet",
+            "message": message,
+        }
+
+    def sign_typed_data(
+        self,
+        full_message: Dict[str, Any],
+        signer: Union[str, BaseAccount],
+    ) -> bytes:
+        """Sign EIP-712 typed data with a provided signer (EOA).
+
+        Args:
+            full_message: Typed data dict compatible with encode_typed_data(full_message=...)
+            signer: Private key string or eth_account BaseAccount/LocalAccount
+
+        Returns:
+            Signature bytes
+        """
+        from eth_account.messages import encode_typed_data
+
+        if isinstance(signer, str):
+            acct: BaseAccount = Account.from_key(signer)
+        else:
+            acct = signer
+
+        encoded = encode_typed_data(full_message=full_message)
+        signed = acct.sign_message(encoded)
+        return signed.signature
+
+    def signEIP712Message(
+        self,
+        domain: Dict[str, Any],
+        message_types: Dict[str, List[Dict[str, str]]],
+        message: Dict[str, Any]
+    ) -> bytes:
+        """Sign an EIP-712 typed message.
+        
+        Args:
+            domain: EIP-712 domain separator
+            message_types: Type definitions for the message
+            message: Message data to sign
+            
+        Returns:
+            Signature bytes
+        """
+        if not self.account:
+            raise ValueError("Cannot sign message: SDK is in read-only mode. Provide a signer to enable signing.")
+        
+        from eth_account.messages import encode_typed_data
+        
+        structured_data = {
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"}
+                ],
+                **message_types
+            },
+            "domain": domain,
+            "primaryType": list(message_types.keys())[0] if message_types else "Message",
+            "message": message
+        }
+        
+        encoded = encode_typed_data(full_message=structured_data)
+        signed = self.account.sign_message(encoded)
+        return signed.signature
+
+    def verifyEIP712Signature(
+        self,
+        domain: Dict[str, Any],
+        message_types: Dict[str, List[Dict[str, str]]],
+        message: Dict[str, Any],
+        signature: bytes
+    ) -> str:
+        """Verify an EIP-712 signature and recover the signer address.
+        
+        Args:
+            domain: EIP-712 domain separator
+            message_types: Type definitions for the message
+            message: Message data that was signed
+            signature: Signature bytes to verify
+            
+        Returns:
+            Recovered signer address
+        """
+        from eth_account.messages import encode_typed_data
+        
+        structured_data = {
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"}
+                ],
+                **message_types
+            },
+            "domain": domain,
+            "primaryType": list(message_types.keys())[0] if message_types else "Message",
+            "message": message
+        }
+        
+        encoded = encode_typed_data(full_message=structured_data)
+        return self.w3.eth.account.recover_message(encoded, signature=signature)

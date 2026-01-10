@@ -76,8 +76,7 @@ def main():
         image="https://example.com/transfer-test-agent.png"
     )
     
-    # Configure agent details
-    agent.setAgentWallet(ownerA_address, CHAIN_ID)
+    # Configure agent details (wallet is on-chain only; set after registration)
     agent.setENS("transfer-test-agent.eth")
     agent.setMetadata({
         "version": "1.0",
@@ -106,6 +105,22 @@ def main():
     print(f"✅ Current owner: {current_owner}")
     print(f"✅ Matches Owner A: {current_owner.lower() == ownerA_address.lower()}")
     
+    # Set wallet on-chain after registration (requires EIP-712 signature).
+    # Since ownerA_address matches current SDK signer, it can auto-sign.
+    print("\n🔍 Setting agent wallet on-chain...")
+    agent.setAgentWallet(ownerA_address, CHAIN_ID)
+    print(f"✅ Agent wallet set on-chain: {ownerA_address}")
+    
+    # Verify wallet is set on-chain
+    token_id = int(registration_result.agentId.split(":")[-1])
+    on_chain_wallet = agentSdk.web3_client.call_contract(
+        agentSdk.identity_registry,
+        "getAgentWallet",
+        token_id
+    )
+    print(f"✅ On-chain wallet verified: {on_chain_wallet}")
+    print(f"✅ Matches expected: {on_chain_wallet.lower() == ownerA_address.lower()}")
+    
     print("\n" + "=" * 60)
     print("STEP 2: TRANSFER AGENT TO OWNER B")
     print("=" * 60)
@@ -133,6 +148,19 @@ def main():
     new_owner = agentSdk.getAgentOwner(registration_result.agentId)
     print(f"✅ New owner: {new_owner}")
     print(f"✅ Matches Owner B: {new_owner.lower() == ownerB_address.lower()}")
+    
+    # Verify wallet was reset to zero address on transfer
+    print("\n🔍 Verifying wallet reset on transfer...")
+    on_chain_wallet_after_transfer = agentSdk.web3_client.call_contract(
+        agentSdk.identity_registry,
+        "getAgentWallet",
+        token_id
+    )
+    print(f"✅ Wallet after transfer: {on_chain_wallet_after_transfer}")
+    if on_chain_wallet_after_transfer == "0x0000000000000000000000000000000000000000":
+        print(f"✅ Wallet correctly reset to zero address (as per ERC-8004 spec)")
+    else:
+        print(f"⚠️  Wallet not reset (expected zero address)")
     
     # Verify agent metadata remains unchanged
     print("\n🔍 Verifying agent metadata remains unchanged...")

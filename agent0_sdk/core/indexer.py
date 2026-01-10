@@ -249,9 +249,9 @@ class AgentIndexer:
         # Get basic agent data from contract
         try:
             if self.identity_registry:
-                token_uri = self.web3_client.call_contract(
+                agent_uri = self.web3_client.call_contract(
                     self.identity_registry,
-                    "tokenURI",
+                    "tokenURI",  # ERC-721 standard function name, but represents agentURI
                     int(token_id)
                 )
             else:
@@ -1041,29 +1041,42 @@ class AgentIndexer:
         for resp in responses_data:
             answers.append({
                 'responder': resp.get('responder'),
-                'responseUri': resp.get('responseUri'),
+                'responseURI': resp.get('responseURI') or resp.get('responseUri'),  # Handle both old and new field names
                 'responseHash': resp.get('responseHash'),
                 'createdAt': resp.get('createdAt')
             })
         
-        # Map tags - check if they're hex bytes32 or plain strings
+        # Map tags - tags are now strings (not bytes32)
         tags = []
         tag1 = feedback_data.get('tag1') or feedback_file.get('tag1')
         tag2 = feedback_data.get('tag2') or feedback_file.get('tag2')
         
-        # Convert hex bytes32 to readable tags
-        if tag1 or tag2:
-            tags = self._hexBytes32ToTags(
-                tag1 if isinstance(tag1, str) else "",
-                tag2 if isinstance(tag2, str) else ""
-            )
-        
-        # If conversion failed, try as plain strings
-        if not tags:
-            if tag1 and not tag1.startswith("0x"):
+        # Tags are now plain strings, but handle backward compatibility with hex bytes32
+        if tag1:
+            if isinstance(tag1, str) and not tag1.startswith("0x"):
                 tags.append(tag1)
-            if tag2 and not tag2.startswith("0x"):
+            elif isinstance(tag1, str) and tag1.startswith("0x"):
+                # Try to convert from hex bytes32 (old format)
+                try:
+                    hex_bytes = bytes.fromhex(tag1[2:])
+                    tag1_str = hex_bytes.rstrip(b'\x00').decode('utf-8', errors='ignore')
+                    if tag1_str:
+                        tags.append(tag1_str)
+                except Exception:
+                    pass  # Ignore invalid hex strings
+        
+        if tag2:
+            if isinstance(tag2, str) and not tag2.startswith("0x"):
                 tags.append(tag2)
+            elif isinstance(tag2, str) and tag2.startswith("0x"):
+                # Try to convert from hex bytes32 (old format)
+                try:
+                    hex_bytes = bytes.fromhex(tag2[2:])
+                    tag2_str = hex_bytes.rstrip(b'\x00').decode('utf-8', errors='ignore')
+                    if tag2_str:
+                        tags.append(tag2_str)
+                except Exception:
+                    pass  # Ignore invalid hex strings
         
         return Feedback(
             id=Feedback.create_id(agentId, clientAddress, feedbackIndex),
@@ -1080,7 +1093,8 @@ class AgentIndexer:
                 'chainId': feedback_file.get('proofOfPaymentChainId'),
                 'txHash': feedback_file.get('proofOfPaymentTxHash'),
             } if feedback_file.get('proofOfPaymentFromAddress') else None,
-            fileURI=feedback_data.get('feedbackUri'),
+            fileURI=feedback_data.get('feedbackURI') or feedback_data.get('feedbackUri'),  # Handle both old and new field names
+            endpoint=feedback_data.get('endpoint'),
             createdAt=feedback_data.get('createdAt', int(time.time())),
             answers=answers,
             isRevoked=feedback_data.get('isRevoked', False),
@@ -1276,10 +1290,10 @@ class AgentIndexer:
     def _get_agent_from_blockchain(self, token_id: int, sdk) -> Optional[Dict[str, Any]]:
         """Get agent data from blockchain."""
         try:
-            # Get token URI from contract
-            token_uri = self.web3_client.call_contract(
+            # Get agent URI from contract (using ERC-721 tokenURI function)
+            agent_uri = self.web3_client.call_contract(
                 sdk.identity_registry,
-                "tokenURI",
+                "tokenURI",  # ERC-721 standard function name, but represents agentURI
                 token_id
             )
             
@@ -1290,27 +1304,41 @@ class AgentIndexer:
                 token_id
             )
             
+            # Get agentWallet using new dedicated function
+            wallet_address = None
+            try:
+                wallet_address = self.web3_client.call_contract(
+                    sdk.identity_registry,
+                    "getAgentWallet",
+                    token_id
+                )
+                if wallet_address == "0x0000000000000000000000000000000000000000":
+                    wallet_address = None
+            except Exception:
+                # Fallback to registration file if getAgentWallet not available
+                pass
+            
             # Create agent ID
             agent_id = f"{sdk.chain_id}:{token_id}"
             
             # Try to load registration data from IPFS
-            registration_data = self._load_registration_from_ipfs(token_uri, sdk)
+            registration_data = self._load_registration_from_ipfs(agent_uri, sdk)
             
             if registration_data:
-                # Use data from IPFS
+                # Use data from IPFS, but prefer on-chain wallet if available
                 return {
                     "agentId": agent_id,
                     "name": registration_data.get("name", f"Agent {token_id}"),
                     "description": registration_data.get("description", f"Agent registered with token ID {token_id}"),
                     "owner": owner,
                     "tokenId": token_id,
-                    "tokenURI": token_uri,
-                    "x402support": registration_data.get("x402support", False),
+                    "agentURI": agent_uri,  # Updated field name
+                    "x402support": registration_data.get("x402Support", registration_data.get("x402support", False)),
                     "trustModels": registration_data.get("trustModels", ["reputation"]),
                     "active": registration_data.get("active", True),
                     "endpoints": registration_data.get("endpoints", []),
                     "image": registration_data.get("image"),
-                    "walletAddress": registration_data.get("walletAddress"),
+                    "walletAddress": wallet_address or registration_data.get("walletAddress"),  # Prefer on-chain wallet
                     "metadata": registration_data.get("metadata", {})
                 }
             else:
@@ -1321,13 +1349,13 @@ class AgentIndexer:
                     "description": f"Agent registered with token ID {token_id}",
                     "owner": owner,
                     "tokenId": token_id,
-                    "tokenURI": token_uri,
+                    "agentURI": agent_uri,  # Updated field name
                     "x402support": False,
                     "trustModels": ["reputation"],
                     "active": True,
                     "endpoints": [],
                     "image": None,
-                    "walletAddress": None,
+                    "walletAddress": wallet_address,
                     "metadata": {}
                 }
         except Exception as e:

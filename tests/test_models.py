@@ -91,7 +91,7 @@ class TestRegistrationFile:
         assert data["description"] == "A test agent"
         assert data["image"] == "https://example.com/image.png"
         assert data["type"] == "https://eips.ethereum.org/EIPS/eip-8004#registration-v1"
-        assert data["x402support"] is False
+        assert data["x402Support"] is False  # Updated to camelCase per ERC-8004 spec
         assert len(data["endpoints"]) == 1
         assert data["endpoints"][0]["name"] == "MCP"
         assert data["endpoints"][0]["endpoint"] == "https://mcp.example.com/"

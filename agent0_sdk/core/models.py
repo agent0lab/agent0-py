@@ -88,28 +88,8 @@ class RegistrationFile:
             }
             endpoints.append(endpoint_dict)
         
-        # Add walletAddress as an endpoint if present
-        if self.walletAddress:
-            # Prefer explicit walletChainId, then provided chain_id, then parse from agentId
-            chain_id_for_wallet = self.walletChainId or chain_id
-            if chain_id_for_wallet is None:
-                chain_id_for_wallet = 1  # Default to mainnet
-                if self.agentId:
-                    parts = self.agentId.split(":")
-                    try:
-                        # Internal AgentId format: "chainId:tokenId"
-                        if len(parts) == 2:
-                            chain_id_for_wallet = int(parts[0])
-                        # CAIP-style AgentId: "eip155:chainId:tokenId"
-                        elif len(parts) >= 3 and parts[0] == "eip155":
-                            chain_id_for_wallet = int(parts[1])
-                    except (ValueError, IndexError):
-                        chain_id_for_wallet = 1
-            
-            endpoints.append({
-                "name": "agentWallet",
-                "endpoint": f"eip155:{chain_id_for_wallet}:{self.walletAddress}"
-            })
+        # Note: agentWallet is no longer included in endpoints array.
+        # It's now a reserved on-chain metadata key managed via setAgentWallet().
         
         # Build registrations array
         registrations = []
@@ -130,7 +110,7 @@ class RegistrationFile:
             "registrations": registrations,
             "supportedTrust": [tm.value if isinstance(tm, TrustModel) else tm for tm in self.trustModels],
             "active": self.active,
-            "x402support": self.x402support,
+            "x402Support": self.x402support,  # Use camelCase in JSON output per spec
             "updatedAt": self.updatedAt,
         }
 
@@ -168,7 +148,7 @@ class RegistrationFile:
             endpoints=endpoints,
             trustModels=trust_models,
             active=data.get("active", False),
-            x402support=data.get("x402support", False),
+            x402support=data.get("x402Support", data.get("x402support", False)),  # Handle both camelCase and lowercase
             metadata=data.get("metadata", {}),
             updatedAt=data.get("updatedAt", int(datetime.now().timestamp())),
         )
@@ -211,6 +191,7 @@ class Feedback:
     context: Optional[Dict[str, Any]] = None
     proofOfPayment: Optional[Dict[str, Any]] = None
     fileURI: Optional[URI] = None
+    endpoint: Optional[str] = None  # Endpoint URI associated with feedback
     createdAt: Timestamp = field(default_factory=lambda: int(datetime.now().timestamp()))
     answers: List[Dict[str, Any]] = field(default_factory=list)
     isRevoked: bool = False
@@ -309,6 +290,7 @@ class SearchFeedbackParams:
     skills: Optional[List[str]] = None
     tasks: Optional[List[str]] = None
     names: Optional[List[str]] = None  # MCP tool/resource/prompt names
+    endpoint: Optional[str] = None  # Filter by endpoint URI
     minScore: Optional[int] = None  # 0-100
     maxScore: Optional[int] = None  # 0-100
     includeRevoked: bool = False

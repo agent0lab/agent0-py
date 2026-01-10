@@ -28,7 +28,8 @@ logging.getLogger('agent0_sdk').setLevel(logging.DEBUG)
 logging.getLogger('agent0_sdk.core').setLevel(logging.DEBUG)
 
 from agent0_sdk import SDK
-from config import CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, print_config
+from config import CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, CLIENT_PRIVATE_KEY, print_config
+from eth_account import Account
 
 
 def generateRandomData():
@@ -46,8 +47,6 @@ def generateRandomData():
         'a2aVersion': f"0.{random.randint(30, 35)}",
         'ensName': f"test{randomSuffix}.eth",
         'ensVersion': f"1.{random.randint(0, 9)}",
-        'walletAddress': f"0x{'a' * 40}",
-        'walletChainId': random.choice([1, 11155111, 8453, 137, 42161]),
         'active': True,
         'x402support': False,
         'reputation': random.choice([True, False]),
@@ -94,7 +93,19 @@ def main():
     agent.setMCP(testData['mcpEndpoint'], testData['mcpVersion'])
     agent.setA2A(testData['a2aEndpoint'], testData['a2aVersion'])
     agent.setENS(testData['ensName'], testData['ensVersion'])
-    agent.setAgentWallet(testData['walletAddress'], testData['walletChainId'])
+    # Note: setAgentWallet() is on-chain only and requires the NEW wallet to sign.
+    # For testing, use CLIENT_PRIVATE_KEY as the second wallet and let the SDK build/sign the typed data.
+    if not CLIENT_PRIVATE_KEY:
+        raise ValueError("CLIENT_PRIVATE_KEY must be set in .env file for this test")
+    
+    # Create account from CLIENT_PRIVATE_KEY to get address and sign (second wallet)
+    second_wallet_account = Account.from_key(CLIENT_PRIVATE_KEY)
+    second_wallet_address = second_wallet_account.address
+    print(f"✅ Using second wallet address (from CLIENT_PRIVATE_KEY): {second_wallet_address}")
+
+    # Set agent wallet (SDK builds + signs typed data using CLIENT_PRIVATE_KEY)
+    # Store walletChainId as current chain for local bookkeeping
+    agent.setAgentWallet(second_wallet_address, sdk.chainId, new_wallet_signer=CLIENT_PRIVATE_KEY)
     agent.setActive(testData['active'])
     agent.setX402Support(testData['x402support'])
     agent.setTrust(
@@ -146,7 +157,8 @@ def main():
     )
     agent.setMCP(f"https://api.example.com/mcp/{random.randint(10000, 99999)}", f"2025-06-{random.randint(1, 28)}")
     agent.setA2A(f"https://api.example.com/a2a/{random.randint(10000, 99999)}.json", f"0.{random.randint(30, 35)}")
-    agent.setAgentWallet(f"0x{'b' * 40}", random.choice([1, 11155111, 8453, 137, 42161]))
+    # Keep using the second wallet. This should be a no-op (wallet already set), but exercises the flow.
+    agent.setAgentWallet(second_wallet_address, sdk.chainId, new_wallet_signer=CLIENT_PRIVATE_KEY)
     agent.setENS(f"{testData['ensName']}.updated", f"1.{random.randint(0, 9)}")
     agent.setActive(False)
     agent.setX402Support(True)
@@ -216,7 +228,8 @@ def main():
     }
     
     expectedState = updatedState
-    expectedState['walletAddress'] = f"0x{'b' * 40}"
+    # Wallet was set on-chain to the second wallet address (verified)
+    expectedState['walletAddress'] = second_wallet_address
     expectedState['walletChainId'] = sdk.chainId
     
     allMatch = True

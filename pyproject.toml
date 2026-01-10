@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent0-sdk"
-version = "0.31"
+version = "0.5"
 description = "Python SDK for agent portability, discovery and trust based on ERC-8004"
 authors = [
     {name = "Marco De Rossi", email = "marco.derossi@consensys.net"}

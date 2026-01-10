@@ -21,7 +21,8 @@ logging.getLogger('agent0_sdk').setLevel(logging.DEBUG)
 logging.getLogger('agent0_sdk.core').setLevel(logging.DEBUG)
 
 from agent0_sdk import SDK
-from config import CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, PINATA_JWT, print_config
+from config import CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, CLIENT_PRIVATE_KEY, PINATA_JWT, print_config
+from eth_account import Account
 
 
 def generateRandomData():
@@ -73,7 +74,7 @@ def main():
     agent.setMCP(testData['mcpEndpoint'], testData['mcpVersion'])
     agent.setA2A(testData['a2aEndpoint'], testData['a2aVersion'])
     agent.setENS(testData['ensName'], testData['ensVersion'])
-    agent.setAgentWallet(testData['walletAddress'], testData['walletChainId'])
+    # Note: setAgentWallet() is on-chain only; do NOT call it before registration.
     agent.setActive(testData['active'])
     agent.setX402Support(testData['x402support'])
     agent.setTrust(
@@ -111,7 +112,19 @@ def main():
     )
     agent.setMCP(f"https://api.example.com/mcp/{random.randint(10000, 99999)}", f"2025-06-{random.randint(1, 28)}")
     agent.setA2A(f"https://api.example.com/a2a/{random.randint(10000, 99999)}.json", f"0.{random.randint(30, 35)}")
-    agent.setAgentWallet(f"0x{'b' * 40}", random.choice([1, 11155111, 8453, 137, 42161]))
+    # Note: After registration, setAgentWallet() requires EIP-712 signature from the NEW wallet.
+    # For testing, set the wallet to a second address derived from CLIENT_PRIVATE_KEY and let SDK sign.
+    if not CLIENT_PRIVATE_KEY:
+        raise ValueError("CLIENT_PRIVATE_KEY must be set in .env file for this test")
+
+    second_wallet_account = Account.from_key(CLIENT_PRIVATE_KEY)
+    second_wallet_address = second_wallet_account.address
+    print(f"✅ Using second wallet address (from CLIENT_PRIVATE_KEY): {second_wallet_address}")
+    agent.setAgentWallet(
+        second_wallet_address,
+        random.choice([1, 11155111, 8453, 137, 42161]),
+        new_wallet_signer=CLIENT_PRIVATE_KEY,
+    )
     agent.setENS(f"{testData['ensName']}.updated", f"1.{random.randint(0, 9)}")
     agent.setActive(False)
     agent.setX402Support(True)
@@ -171,7 +184,8 @@ def main():
     expectedState = updatedState
     
     # Override expected values for fields that should match the updated state
-    expectedState['walletAddress'] = f"0x{'b' * 40}"
+    # Wallet was set on-chain to second_wallet_address (from CLIENT_PRIVATE_KEY)
+    expectedState['walletAddress'] = second_wallet_address
     # When wallet is set on-chain, walletChainId will be the current chain (where the update happened)
     # This is different from the original registration file's chain ID
     expectedState['walletChainId'] = sdk.chainId  # Current chain where wallet was updated

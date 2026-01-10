@@ -176,16 +176,14 @@ class Agent:
         return self.registration_file
 
     def _collectMetadataForRegistration(self) -> List[Dict[str, Any]]:
-        """Collect all metadata entries for registration."""
+        """Collect all metadata entries for registration.
+        
+        Note: agentWallet is now a reserved metadata key and cannot be set via setMetadata().
+        It must be set separately using setAgentWallet() with EIP-712 signature verification.
+        """
         metadata_entries = []
         
-        # Add wallet address metadata
-        if self.walletAddress:
-            addr_bytes = bytes.fromhex(self.walletAddress[2:])  # Remove '0x' prefix
-            metadata_entries.append({
-                "key": "agentWallet",
-                "value": addr_bytes
-            })
+        # Note: agentWallet is no longer set via metadata - it's now reserved and managed via setAgentWallet()
         
         # Add ENS name metadata
         if self.ensEndpoint:
@@ -492,20 +490,55 @@ class Agent:
         self.registration_file.updatedAt = int(time.time())
         return self
 
-    def setAgentWallet(self, addr: Optional[Address], chainId: Optional[int] = None) -> 'Agent':
-        """Set agent wallet address in registration file (will be saved on-chain during next register call)."""
-        # Validate address format if provided
-        if addr:
-            if not addr.startswith("0x") or len(addr) != 42:
-                raise ValueError(f"Invalid Ethereum address format: {addr}. Must be 42 characters starting with '0x'")
-            
-            # Validate hexadecimal characters
-            try:
-                int(addr[2:], 16)
-            except ValueError:
-                raise ValueError(f"Invalid hexadecimal characters in address: {addr}")
+    def setAgentWallet(
+        self,
+        new_wallet: Address,
+        chainId: Optional[int] = None,
+        *,
+        new_wallet_signer: Optional[Union[str, Any]] = None,
+        deadline: Optional[int] = None,
+        signature: Optional[bytes] = None,
+    ) -> 'Agent':
+        """Set agent wallet address on-chain (ERC-8004 agentWallet).
+
+        This method is **on-chain only**. The `agentWallet` is a verified attribute and must be set via
+        the IdentityRegistry `setAgentWallet` function.
+
+        EOAs: provide `new_wallet_signer` (private key string or eth-account account) OR ensure the SDK
+        signer address matches `new_wallet` so the SDK can auto-sign.\n
+        Contract wallets (ERC-1271): provide `signature` bytes produced by the wallet’s signing mechanism.
+        The SDK will build the correct EIP-712 typed data internally, but cannot produce the wallet signature.
+
+        Args:
+            new_wallet: New wallet address (must be controlled by the signer that produces the signature)
+            chainId: Optional local bookkeeping for registration file (walletChainId). Defaults to agent chain.
+            new_wallet_signer: EOA signer used to sign the EIP-712 message (private key string or eth-account account)
+            deadline: Signature deadline timestamp. Defaults to now+60s (must be <= now+5min per contract).
+            signature: Raw signature bytes (intended for ERC-1271 / external signing only)
+        """
+        # Breaking/clean: this API is only meaningful for already-registered agents.
+        if not self.agentId:
+            raise ValueError(
+                "Cannot set agent wallet before the agent is registered on-chain. "
+                "Call agent.register(...) / agent.registerIPFS() first to obtain agentId."
+            )
+
+        addr = new_wallet
+
+        if not addr:
+            raise ValueError("Wallet address cannot be empty. Use a non-zero address.")
         
-        # Determine chain ID to use
+        # Validate address format
+        if not addr.startswith("0x") or len(addr) != 42:
+            raise ValueError(f"Invalid Ethereum address format: {addr}. Must be 42 characters starting with '0x'")
+        
+        # Validate hexadecimal characters
+        try:
+            int(addr[2:], 16)
+        except ValueError:
+            raise ValueError(f"Invalid hexadecimal characters in address: {addr}")
+        
+        # Determine chain ID to use (local bookkeeping)
         if chainId is None:
             # Extract chain ID from agentId if available, otherwise use SDK's chain ID
             if self.agentId and ":" in self.agentId:
@@ -516,14 +549,104 @@ class Agent:
             else:
                 chainId = self.sdk.chainId  # Use SDK's chain ID as fallback
         
-        # Check if wallet changed
-        if addr != self._last_registered_wallet:
-            self._dirty_metadata.add("agentWallet")
+        # Parse agent ID
+        agent_id_int = int(self.agentId.split(":")[-1]) if ":" in self.agentId else int(self.agentId)
+
+        # Check if wallet is already set to this address (skip if same)
+        try:
+            current_wallet = self.sdk.web3_client.call_contract(
+                self.sdk.identity_registry,
+                "getAgentWallet",
+                agent_id_int
+            )
+            if current_wallet and current_wallet.lower() == addr.lower():
+                logger.debug(f"Agent wallet is already set to {addr}, skipping on-chain update")
+                # Still update local registration file
+                self.registration_file.walletAddress = addr
+                self.registration_file.walletChainId = chainId
+                self.registration_file.updatedAt = int(time.time())
+                return self
+        except Exception as e:
+            logger.debug(f"Could not check current agent wallet: {e}, proceeding with update")
+        
+        # Set deadline (default to 60 seconds from now; contract max is now+5min)
+        if deadline is None:
+            deadline = int(time.time()) + 60
+        
+        # Resolve typed data + signature
+        identity_registry_address = self.sdk.identity_registry.address
+        owner_address = self.sdk.web3_client.call_contract(self.sdk.identity_registry, "ownerOf", agent_id_int)
+
+        full_message = self.sdk.web3_client.build_agent_wallet_set_typed_data(
+            agent_id=agent_id_int,
+            new_wallet=addr,
+            owner=owner_address,
+            deadline=deadline,
+            verifying_contract=identity_registry_address,
+            chain_id=self.sdk.web3_client.chain_id,
+        )
+
+        if signature is None:
+            # EOA signing paths
+            if new_wallet_signer is not None:
+                # Validate signer address matches addr (fail fast)
+                try:
+                    from eth_account import Account as _Account
+                    if isinstance(new_wallet_signer, str):
+                        signer_addr = _Account.from_key(new_wallet_signer).address
+                    else:
+                        signer_addr = getattr(new_wallet_signer, "address", None)
+                except Exception:
+                    signer_addr = getattr(new_wallet_signer, "address", None)
+
+                if not signer_addr or signer_addr.lower() != addr.lower():
+                    raise ValueError(
+                        f"new_wallet_signer address ({signer_addr}) does not match new_wallet ({addr})."
+                    )
+
+                signature = self.sdk.web3_client.sign_typed_data(full_message, new_wallet_signer)  # type: ignore[arg-type]
+            else:
+                # Auto-sign only if SDK signer == new wallet
+                current_address = self.sdk.web3_client.account.address if self.sdk.web3_client.account else None
+                if current_address and current_address.lower() == addr.lower():
+                    signature = self.sdk.web3_client.sign_typed_data(full_message, self.sdk.web3_client.account)
+                else:
+                    raise ValueError(
+                        f"New wallet must sign. Provide new_wallet_signer (EOA) or signature (ERC-1271/external). "
+                        f"SDK signer is {current_address}, new_wallet is {addr}."
+                    )
+
+            # Optional: verify recover matches addr for EOA signatures
+            recovered = self.sdk.web3_client.w3.eth.account.recover_message(
+                __import__("eth_account.messages").messages.encode_typed_data(full_message=full_message),
+                signature=signature,
+            )
+            if recovered.lower() != addr.lower():
+                raise ValueError(f"Signature verification failed: recovered {recovered} but expected {addr}")
+        
+        # Call setAgentWallet on the contract
+        try:
+            txHash = self.sdk.web3_client.transact_contract(
+                self.sdk.identity_registry,
+                "setAgentWallet",
+                agent_id_int,
+                addr,
+                deadline,
+                signature
+            )
+            
+            # Wait for transaction
+            receipt = self.sdk.web3_client.wait_for_transaction(txHash)
+            logger.debug(f"Agent wallet set on-chain: {txHash}")
+            
+        except Exception as e:
+            raise ValueError(f"Failed to set agent wallet on-chain: {e}")
         
         # Update local registration file
         self.registration_file.walletAddress = addr
         self.registration_file.walletChainId = chainId
         self.registration_file.updatedAt = int(time.time())
+        self._last_registered_wallet = addr
         
         return self
 
@@ -636,7 +759,7 @@ class Agent:
             agentId = int(self.agentId.split(":")[-1])
             txHash = self.sdk.web3_client.transact_contract(
                 self.sdk.identity_registry,
-                "setAgentUri",
+                "setAgentURI",
                 agentId,
                 f"ipfs://{ipfsCid}"
             )
@@ -673,7 +796,7 @@ class Agent:
             agentId = int(self.agentId.split(":")[-1])
             txHash = self.sdk.web3_client.transact_contract(
                 self.sdk.identity_registry,
-                "setAgentUri",
+                "setAgentURI",
                 agentId,
                 f"ipfs://{ipfsCid}"
             )
@@ -715,7 +838,7 @@ class Agent:
         txHash = self.sdk.web3_client.transact_contract(
             self.sdk.identity_registry,
             "register",
-            "",  # Empty tokenUri for now
+            "",  # Empty agentURI for now
             metadata_entries
         )
         
@@ -820,7 +943,7 @@ class Agent:
             agentId = int(self.registration_file.agentId.split(":")[-1])
             txHash = self.sdk.web3_client.transact_contract(
                 self.sdk.identity_registry,
-                "setAgentUri",
+                "setAgentURI",
                 agentId,
                 agentURI
             )
@@ -846,7 +969,12 @@ class Agent:
         approve_operator: bool = False,
         idem: Optional[IdemKey] = None,
     ) -> Dict[str, Any]:
-        """Transfer agent ownership."""
+        """Transfer agent ownership.
+        
+        Note: When an agent is transferred, the agentWallet is automatically reset
+        to the zero address on-chain. The new owner must call setAgentWallet() to
+        set a new wallet address with EIP-712 signature verification.
+        """
         if not self.registration_file.agentId:
             raise ValueError("Agent must be registered before transferring")
         
@@ -862,6 +990,11 @@ class Agent:
         )
         
         receipt = self.sdk.web3_client.wait_for_transaction(txHash)
+        
+        # Note: agentWallet will be reset to zero address by the contract
+        # Update local state to reflect this
+        self.registration_file.walletAddress = None
+        self._last_registered_wallet = None
         
         return {
             "txHash": txHash,
@@ -906,6 +1039,10 @@ class Agent:
         """Transfer agent ownership to a new address.
         
         Only the current owner can transfer the agent.
+        
+        Note: When an agent is transferred, the agentWallet is automatically reset
+        to the zero address on-chain. The new owner must call setAgentWallet() to
+        set a new wallet address with EIP-712 signature verification.
         
         Args:
             newOwnerAddress: Ethereum address of the new owner
@@ -963,6 +1100,11 @@ class Agent:
         receipt = self.sdk.web3_client.wait_for_transaction(txHash)
         
         logger.debug(f"Agent {self.registration_file.agentId} successfully transferred to {checksum_address}")
+        
+        # Note: agentWallet will be reset to zero address by the contract
+        # Update local state to reflect this
+        self.registration_file.walletAddress = None
+        self._last_registered_wallet = None
         
         return {"txHash": txHash, "from": currentOwner, "to": checksum_address, "agentId": self.registration_file.agentId}
 

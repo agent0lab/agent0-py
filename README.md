@@ -87,7 +87,10 @@ agent.addDomain("finance_and_business/investment_services", validate_oasf=True)
 agent.addDomain("technology/data_science/data_science", validate_oasf=True)
 
 # Configure wallet and trust
-agent.setAgentWallet("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb", chainId=11155111)
+# Note: agentWallet is an on-chain verified attribute. setAgentWallet() is on-chain only.
+# EOAs: the NEW wallet must sign an EIP-712 message. If you pass new_wallet_signer, the SDK will
+# build + sign the typed data automatically.
+# If the current SDK signer address matches the new wallet, it can auto-sign without new_wallet_signer.
 agent.setTrust(reputation=True, cryptoEconomic=True)
 
 # Add metadata and set status
@@ -98,6 +101,16 @@ agent.setActive(True)
 agent.registerIPFS()
 print(f"Agent registered: {agent.agentId}")  # e.g., "11155111:123"
 print(f"Agent URI: {agent.agentURI}")  # e.g., "ipfs://Qm..."
+
+# (Optional) Change the agent wallet after registration
+# - On mint/registration, `agentWallet` defaults to the current owner address.
+# - Call this only if you want a DIFFERENT wallet (or after a transfer, since the wallet resets to zero).
+# - Transaction is sent by the SDK signer (agent owner), but the signature must be produced by the NEW wallet.
+agent.setAgentWallet(
+    "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
+    chainId=11155111,
+    new_wallet_signer=os.getenv("NEW_WALLET_PRIVATE_KEY"),
+)
 ```
 
 ### 3. Load and Edit Agent
@@ -143,7 +156,8 @@ agent_summary = sdk.getAgent("11155111:123")
 feedback_file = sdk.prepareFeedback(
     agentId="11155111:123",
     score=85,  # 0-100 (mandatory)
-    tags=["data_analyst", "finance"],  # Optional
+    tags=["data_analyst", "finance"],  # Optional: tags are now strings (not bytes32)
+    endpoint="https://example.com/endpoint",  # Optional: endpoint URI associated with feedback
     capability="tools",  # Optional: MCP capability
     name="code_generation",  # Optional: MCP tool name
     skill="python"  # Optional: A2A skill

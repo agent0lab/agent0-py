@@ -30,25 +30,38 @@ class SubgraphClient:
         Returns:
             JSON response from the subgraph
         """
-        try:
+        def _do_query(q: str) -> Dict[str, Any]:
             response = requests.post(
                 self.subgraph_url,
-                json={
-                    'query': query,
-                    'variables': variables or {}
-                },
+                json={'query': q, 'variables': variables or {}},
                 headers={'Content-Type': 'application/json'},
-                timeout=10
+                timeout=10,
             )
             response.raise_for_status()
             result = response.json()
-            
-            # Check for GraphQL errors
             if 'errors' in result:
                 error_messages = [err.get('message', 'Unknown error') for err in result['errors']]
                 raise ValueError(f"GraphQL errors: {', '.join(error_messages)}")
-            
             return result.get('data', {})
+
+        try:
+            return _do_query(query)
+        except ValueError as e:
+            # Backwards/forwards compatibility for hosted subgraphs:
+            # Some deployments still expose `responseUri` instead of `responseURI`.
+            msg = str(e)
+            if ("has no field" in msg and "responseURI" in msg) and ("responseURI" in query):
+                logger.debug("Subgraph schema missing responseURI; retrying query with responseUri")
+                return _do_query(query.replace("responseURI", "responseUri"))
+            # Some deployments don't expose agentWallet fields on AgentRegistrationFile.
+            if (
+                "Type `AgentRegistrationFile` has no field `agentWallet`" in msg
+                or "Type `AgentRegistrationFile` has no field `agentWalletChainId`" in msg
+            ):
+                logger.debug("Subgraph schema missing agentWallet fields; retrying query without them")
+                q2 = query.replace("agentWalletChainId", "").replace("agentWallet", "")
+                return _do_query(q2)
+            raise
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to query subgraph: {e}")
 
@@ -248,10 +261,12 @@ class SubgraphClient:
                 ) {{
                     id
                     score
+                    feedbackIndex
                     tag1
                     tag2
+                    endpoint
                     clientAddress
-                    feedbackUri
+                    feedbackURI
                     feedbackURIType
                     feedbackHash
                     isRevoked
@@ -276,7 +291,7 @@ class SubgraphClient:
                     responses {{
                         id
                         responder
-                        responseUri
+                        responseURI
                         responseHash
                         createdAt
                     }}
@@ -400,10 +415,12 @@ class SubgraphClient:
                 id
                 agent { id agentId chainId }
                 clientAddress
+                feedbackIndex
                 score
                 tag1
                 tag2
-                feedbackUri
+                endpoint
+                feedbackURI
                 feedbackURIType
                 feedbackHash
                 isRevoked
@@ -429,7 +446,7 @@ class SubgraphClient:
                 responses {
                     id
                     responder
-                    responseUri
+                    responseURI
                     responseHash
                     createdAt
                 }
@@ -548,10 +565,12 @@ class SubgraphClient:
                 id
                 agent {{ id agentId chainId }}
                 clientAddress
+                feedbackIndex
                 score
                 tag1
                 tag2
-                feedbackUri
+                endpoint
+                feedbackURI
                 feedbackURIType
                 feedbackHash
                 isRevoked
@@ -577,7 +596,7 @@ class SubgraphClient:
                 responses {{
                     id
                     responder
-                    responseUri
+                    responseURI
                     responseHash
                     createdAt
                 }}

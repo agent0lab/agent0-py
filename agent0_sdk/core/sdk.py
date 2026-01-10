@@ -297,20 +297,20 @@ class SDK:
         
         # Get token URI from contract
         try:
-            token_uri = self.web3_client.call_contract(
-                self.identity_registry, "tokenURI", int(token_id)
+            agent_uri = self.web3_client.call_contract(
+                self.identity_registry, "tokenURI", int(token_id)  # tokenURI is ERC-721 standard, but represents agentURI
             )
         except Exception as e:
             raise ValueError(f"Failed to load agent {agentId}: {e}")
         
-        # Load registration file (or fall back to a minimal file if token URI is missing)
-        registration_file = self._load_registration_file(token_uri)
+        # Load registration file (or fall back to a minimal file if agent URI is missing)
+        registration_file = self._load_registration_file(agent_uri)
         registration_file.agentId = agentId
-        registration_file.agentURI = token_uri if token_uri else None
+        registration_file.agentURI = agent_uri if agent_uri else None
 
-        if not token_uri or not str(token_uri).strip():
+        if not agent_uri or not str(agent_uri).strip():
             logger.warning(
-                f"Agent {agentId} has no tokenURI set on-chain yet. "
+                f"Agent {agentId} has no agentURI set on-chain yet. "
                 "Returning a partial agent; update info and call registerIPFS() to publish and set URI."
             )
         
@@ -363,21 +363,20 @@ class SDK:
         # For now, we'll leave it empty
         registration_file.operators = []
         
-        # Hydrate metadata from on-chain (agentWallet, agentName, custom metadata)
+        # Hydrate agentWallet from on-chain (now uses getAgentWallet() instead of metadata)
         agent_id = token_id
         try:
-            # Try to get agentWallet from on-chain metadata
-            wallet_bytes = self.web3_client.call_contract(
-                self.identity_registry, "getMetadata", agent_id, "agentWallet"
+            # Get agentWallet using the new dedicated function
+            wallet_address = self.web3_client.call_contract(
+                self.identity_registry, "getAgentWallet", agent_id
             )
-            if wallet_bytes and len(wallet_bytes) > 0:
-                wallet_address = "0x" + wallet_bytes.hex()
+            if wallet_address and wallet_address != "0x0000000000000000000000000000000000000000":
                 registration_file.walletAddress = wallet_address
                 # If wallet is read from on-chain, use current chain ID
                 # (the chain ID from the registration file might be outdated)
                 registration_file.walletChainId = self.chainId
         except Exception as e:
-            # No on-chain wallet, will fall back to registration file
+            # No on-chain wallet set, will fall back to registration file
             pass
         
         try:
@@ -921,11 +920,10 @@ class SDK:
         agentId: "AgentId",
         feedbackFile: Dict[str, Any],
         idem: Optional["IdemKey"] = None,
-        feedbackAuth: Optional[bytes] = None,
     ) -> "Feedback":
         """Give feedback (maps 8004 endpoint)."""
         return self.feedback_manager.giveFeedback(
-            agentId, feedbackFile, idem, feedbackAuth
+            agentId, feedbackFile, idem
         )
     
     def getFeedback(

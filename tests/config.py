@@ -8,8 +8,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
-# Look for .env in parent directory (project root)
-env_path = Path(__file__).parent.parent.parent / ".env"
+# Look for .env in project root (agent0-py directory)
+# Try parent.parent first (agent0-py/.env), then parent.parent.parent as fallback
+env_path = Path(__file__).parent.parent / ".env"
+if not env_path.exists():
+    env_path = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 # Chain Configuration
@@ -30,7 +33,10 @@ SUBGRAPH_URL = os.getenv(
 )
 
 # Agent ID for testing (can be overridden via env)
-AGENT_ID = os.getenv("AGENT_ID", "11155111:374")
+AGENT_ID = os.getenv("AGENT_ID", "11155111:46")
+
+# Client Private Key (for feedback tests - different wallet from agent)
+CLIENT_PRIVATE_KEY = os.getenv("CLIENT_PRIVATE_KEY", "")
 
 
 def print_config():
@@ -39,6 +45,7 @@ def print_config():
     print(f"  CHAIN_ID: {CHAIN_ID}")
     print(f"  RPC_URL: {RPC_URL[:50]}...")
     print(f"  AGENT_PRIVATE_KEY: {'***' if AGENT_PRIVATE_KEY else 'NOT SET'}")
+    print(f"  CLIENT_PRIVATE_KEY: {'***' if CLIENT_PRIVATE_KEY else 'NOT SET'}")
     print(f"  PINATA_JWT: {'***' if PINATA_JWT else 'NOT SET'}")
     print(f"  SUBGRAPH_URL: {SUBGRAPH_URL[:50]}...")
     print(f"  AGENT_ID: {AGENT_ID}")
