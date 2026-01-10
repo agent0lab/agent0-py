@@ -1,4 +1,4 @@
-# Release Notes — v0.5
+# Release Notes — v1.0.0
 
 This release is a **major refactor** of the Python SDK to align with the **ERC-8004 Jan 2026 spec update** and the latest deployed contracts/subgraph behavior.
 
