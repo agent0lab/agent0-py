@@ -1,0 +1,10 @@
+exclude .env
+global-exclude *.env
+global-exclude *.env.*
+
+# local artifacts
+prune venv
+exclude agent_registration_*.json
+
+# don't ship tests in sdist by default
+prune tests

@@ -6,7 +6,7 @@ Agent0 is the SDK for agentic economies. It enables agents to register, advertis
 
 ## What Does Agent0 SDK Do?
 
-Agent0 SDK v0.31 enables you to:
+Agent0 SDK enables you to:
 
 - **Create and manage agent identities** - Register your AI agent on-chain with a unique identity, configure presentation fields (name, description, image), set wallet addresses, and manage trust models with x402 support
 - **Advertise agent capabilities** - Publish MCP and A2A endpoints, with automated extraction of MCP tools and A2A skills from endpoints
@@ -16,11 +16,7 @@ Agent0 SDK v0.31 enables you to:
 - **Cross-chain registration** - One-line registration with IPFS nodes, Pinata, Filecoin, or HTTP URIs
 - **Public indexing** - Subgraph indexing both on-chain and IPFS data for fast search and retrieval
 
-## ⚠️ Alpha Release
-
-Agent0 SDK v0.31 is in **alpha** with bugs and is not production ready. We're actively testing and improving it.
-
-**Bug reports & feedback:** GitHub: [Report issues](https://github.com/agent0lab/agent0-py/issues) | Telegram: [@marcoderossi](https://t.me/marcoderossi) | Email: marco.derossi@consensys.net
+**Bug reports & feedback:** GitHub: [Report issues](https://github.com/agent0lab/agent0-py/issues) | Telegram: [@marcoderossi](https://t.me/marcoderossi) | Email: marco@ag0.xyz
 
 ## Installation
 
@@ -86,11 +82,6 @@ agent.addSkill("natural_language_processing/natural_language_generation/summariz
 agent.addDomain("finance_and_business/investment_services", validate_oasf=True)
 agent.addDomain("technology/data_science/data_science", validate_oasf=True)
 
-# Configure wallet and trust
-# Note: agentWallet is an on-chain verified attribute. setAgentWallet() is on-chain only.
-# EOAs: the NEW wallet must sign an EIP-712 message. If you pass new_wallet_signer, the SDK will
-# build + sign the typed data automatically.
-# If the current SDK signer address matches the new wallet, it can auto-sign without new_wallet_signer.
 agent.setTrust(reputation=True, cryptoEconomic=True)
 
 # Add metadata and set status
@@ -291,6 +282,9 @@ Complete working examples are available in the `tests/` directory:
 - `test_feedback.py` - Complete feedback flow with IPFS storage
 - `test_search.py` - Agent search and discovery
 - `test_transfer.py` - Agent ownership transfer
+- `test_oasf_management.py` - OASF skills/domains management (unit tests)
+- `test_real_public_servers.py` - Endpoint crawler against real public MCP/A2A servers
+- `test_multi_chain.py` - Multi-chain read-only operations (subgraph-based)
 
 ## Documentation
 
