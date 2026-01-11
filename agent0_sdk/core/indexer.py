@@ -1094,7 +1094,8 @@ class AgentIndexer:
                 'txHash': feedback_file.get('proofOfPaymentTxHash'),
             } if feedback_file.get('proofOfPaymentFromAddress') else None,
             fileURI=feedback_data.get('feedbackURI') or feedback_data.get('feedbackUri'),  # Handle both old and new field names
-            endpoint=feedback_data.get('endpoint'),
+            # Prefer on-chain endpoint; fall back to off-chain file endpoint if missing
+            endpoint=feedback_data.get('endpoint') or feedback_file.get('endpoint'),
             createdAt=feedback_data.get('createdAt', int(time.time())),
             answers=answers,
             isRevoked=feedback_data.get('isRevoked', False),

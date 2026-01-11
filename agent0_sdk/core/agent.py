@@ -327,7 +327,8 @@ class Agent:
         oasf_endpoint = Endpoint(
             type=EndpointType.OASF,
             value="https://github.com/agntcy/oasf/",
-            meta={"version": "v0.8.0", "skills": [], "domains": []}
+            # Version string follows ERC-8004 spec example ("0.8")
+            meta={"version": "0.8", "skills": [], "domains": []}
         )
         self.registration_file.endpoints.append(oasf_endpoint)
         return oasf_endpoint
@@ -529,14 +530,14 @@ class Agent:
             raise ValueError("Wallet address cannot be empty. Use a non-zero address.")
         
         # Validate address format
-        if not addr.startswith("0x") or len(addr) != 42:
-            raise ValueError(f"Invalid Ethereum address format: {addr}. Must be 42 characters starting with '0x'")
-        
-        # Validate hexadecimal characters
-        try:
-            int(addr[2:], 16)
-        except ValueError:
-            raise ValueError(f"Invalid hexadecimal characters in address: {addr}")
+            if not addr.startswith("0x") or len(addr) != 42:
+                raise ValueError(f"Invalid Ethereum address format: {addr}. Must be 42 characters starting with '0x'")
+            
+            # Validate hexadecimal characters
+            try:
+                int(addr[2:], 16)
+            except ValueError:
+                raise ValueError(f"Invalid hexadecimal characters in address: {addr}")
         
         # Determine chain ID to use (local bookkeeping)
         if chainId is None:

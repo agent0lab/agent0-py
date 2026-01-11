@@ -160,7 +160,7 @@ class IPFSClient:
         # add_str returns the CID directly as a string
         return result if isinstance(result, str) else result['Hash']
 
-    def _pin_to_pinata(self, data: str) -> str:
+    def _pin_to_pinata(self, data: str, file_name: str = "file.json") -> str:
         """Pin data to Pinata using JWT authentication with v3 API."""
         import requests
         import tempfile
@@ -185,7 +185,7 @@ class IPFSClient:
             # Prepare the file for upload with public network setting
             with open(temp_path, 'rb') as file:
                 files = {
-                    'file': ('registration.json', file, 'application/json')
+                    'file': (file_name, file, 'application/json')
                 }
                 
                 # Add network parameter to make file public
@@ -233,8 +233,9 @@ class IPFSClient:
 
     def add(self, data: str, **kwargs) -> str:
         """Add data to IPFS and return CID."""
+        file_name = kwargs.pop("file_name", None)
         if self.pinata_enabled:
-            return self._pin_to_pinata(data)
+            return self._pin_to_pinata(data, file_name=file_name or "file.json")
         elif self.filecoin_pin_enabled:
             # Create temporary file for Filecoin Pin
             with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
@@ -251,11 +252,12 @@ class IPFSClient:
 
     def add_file(self, filepath: str, **kwargs) -> str:
         """Add file to IPFS and return CID."""
+        file_name = kwargs.pop("file_name", None)
         if self.pinata_enabled:
             # Read file and send to Pinata
             with open(filepath, 'r') as f:
                 data = f.read()
-            return self._pin_to_pinata(data)
+            return self._pin_to_pinata(data, file_name=file_name or "file.json")
         elif self.filecoin_pin_enabled:
             return self._pin_to_filecoin(filepath)
         else:
@@ -332,7 +334,7 @@ class IPFSClient:
     def addRegistrationFile(self, registrationFile: "RegistrationFile", chainId: Optional[int] = None, identityRegistryAddress: Optional[str] = None, **kwargs) -> str:
         """Add registration file to IPFS and return CID."""
         data = registrationFile.to_dict(chain_id=chainId, identity_registry_address=identityRegistryAddress)
-        return self.add_json(data, **kwargs)
+        return self.add_json(data, file_name="agent-registration.json", **kwargs)
 
     def getRegistrationFile(self, cid: str) -> "RegistrationFile":
         """Get registration file from IPFS by CID."""
@@ -342,7 +344,7 @@ class IPFSClient:
 
     def addFeedbackFile(self, feedbackData: Dict[str, Any], **kwargs) -> str:
         """Add feedback file to IPFS and return CID."""
-        return self.add_json(feedbackData, **kwargs)
+        return self.add_json(feedbackData, file_name="feedback.json", **kwargs)
 
     def getFeedbackFile(self, cid: str) -> Dict[str, Any]:
         """Get feedback file from IPFS by CID."""

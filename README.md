@@ -16,7 +16,7 @@ Agent0 SDK enables you to:
 - **Cross-chain registration** - One-line registration with IPFS nodes, Pinata, Filecoin, or HTTP URIs
 - **Public indexing** - Subgraph indexing both on-chain and IPFS data for fast search and retrieval
 
-**Bug reports & feedback:** GitHub: [Report issues](https://github.com/agent0lab/agent0-py/issues) | Telegram: [@marcoderossi](https://t.me/marcoderossi) | Email: marco@ag0.xyz
+**Bug reports & feedback:** GitHub: [Report issues](https://github.com/agent0lab/agent0-py/issues) | Telegram: [Agent0 channel](https://t.me/agent0kitchen) | Email: team@ag0.xyz
 
 ## Installation
 
@@ -143,19 +143,31 @@ agent_summary = sdk.getAgent("11155111:123")
 ### 5. Give and Retrieve Feedback
 
 ```python
-# Prepare feedback (only score is mandatory)
-feedback_file = sdk.prepareFeedback(
+# On-chain-only feedback (no off-chain upload, even if IPFS is configured)
+feedback = sdk.giveFeedback(
     agentId="11155111:123",
     score=85,  # 0-100 (mandatory)
-    tags=["data_analyst", "finance"],  # Optional: tags are now strings (not bytes32)
-    endpoint="https://example.com/endpoint",  # Optional: endpoint URI associated with feedback
-    capability="tools",  # Optional: MCP capability
-    name="code_generation",  # Optional: MCP tool name
-    skill="python"  # Optional: A2A skill
+    tag1="data_analyst",  # Optional: tags are strings
+    tag2="finance",
+    endpoint="https://example.com/endpoint",  # Optional: saved on-chain
 )
 
-# Give feedback
-feedback = sdk.giveFeedback(agentId="11155111:123", feedbackFile=feedback_file)
+# Rich feedback (optional off-chain file + on-chain fields)
+feedback_file = sdk.prepareFeedbackFile({
+    "capability": "tools",       # Optional: MCP capability
+    "name": "code_generation",   # Optional: MCP tool name
+    "skill": "python",           # Optional: A2A skill
+    "text": "Great agent!",      # Optional
+})
+
+feedback = sdk.giveFeedback(
+    agentId="11155111:123",
+    score=85,
+    tag1="data_analyst",
+    tag2="finance",
+    endpoint="https://example.com/endpoint",
+    feedbackFile=feedback_file,  # If provided, requires IPFS configured
+)
 
 # Search feedback
 results = sdk.searchFeedback(
@@ -235,7 +247,7 @@ OASF skills and domains appear in your agent's registration file:
     {
       "name": "OASF",
       "endpoint": "https://github.com/agntcy/oasf/",
-      "version": "v0.8.0",
+      "version": "0.8",
       "skills": [
         "advanced_reasoning_planning/strategic_planning",
         "data_engineering/data_transformation_pipeline"

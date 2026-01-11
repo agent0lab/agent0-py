@@ -8,7 +8,7 @@ import json
 import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .models import (
     AgentId, Address, URI, Timestamp, IdemKey,
@@ -40,77 +40,66 @@ class FeedbackManager:
         self.subgraph_client = subgraph_client
         self.indexer = indexer
 
-    def prepareFeedback(
-        self,
-        agentId: AgentId,
-        score: Optional[int] = None,  # 0-100
-        tags: List[str] = None,
-        text: Optional[str] = None,
-        capability: Optional[str] = None,
-        name: Optional[str] = None,
-        skill: Optional[str] = None,
-        task: Optional[str] = None,
-        endpoint: Optional[str] = None,
-        domain: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None,
-        proofOfPayment: Optional[Dict[str, Any]] = None,
-        extra: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Prepare feedback file (local file/object) according to spec."""
-        if tags is None:
-            tags = []
+    def prepareFeedbackFile(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """Prepare an off-chain feedback file payload (no on-chain fields).
         
-        # Parse agent ID to get token ID
-        if ":" in agentId:
-            tokenId = int(agentId.split(":")[-1])
-        else:
-            tokenId = int(agentId)
+        This intentionally does NOT attempt to represent on-chain fields like:
+        score/tag1/tag2/endpoint (on-chain value), or registry-derived fields.
         
-        # Get current timestamp in ISO format
-        createdAt = datetime.fromtimestamp(time.time()).isoformat() + "Z"
-        
-        # Build feedback data according to spec
-        feedbackData = {
-            # MUST FIELDS
-            "agentRegistry": f"eip155:{self.web3_client.chain_id}:{self.identity_registry.address if self.identity_registry else '0x0'}",
-            "agentId": tokenId,
-            "clientAddress": f"eip155:{self.web3_client.chain_id}:{self.web3_client.account.address}",
-            "createdAt": createdAt,
-            "score": int(score) if score else 0,  # Score as integer (0-100)
-            
-            # MAY FIELDS
-            "tag1": tags[0] if tags else None,
-            "tag2": tags[1] if len(tags) > 1 else None,
-            "endpoint": endpoint,
-            "domain": domain,
-            "skill": skill,
-            "context": context,
-            "task": task,
-            "capability": capability,
-            "name": name,
-            "proofOfPayment": proofOfPayment,
-        }
-        
-        # Remove None values to keep the structure clean
-        feedbackData = {k: v for k, v in feedbackData.items() if v is not None}
-        
-        if extra:
-            feedbackData.update(extra)
-        
-        return feedbackData
+        It may validate/normalize and remove None values.
+        """
+        if input is None:
+            raise ValueError("prepareFeedbackFile input cannot be None")
+        if not isinstance(input, dict):
+            raise TypeError(f"prepareFeedbackFile input must be a dict, got {type(input)}")
+
+        # Shallow copy and strip None values
+        out: Dict[str, Any] = {k: v for k, v in dict(input).items() if v is not None}
+
+        # Minimal normalization for known optional fields
+        if "endpoint" in out and out["endpoint"] is not None and not isinstance(out["endpoint"], str):
+            out["endpoint"] = str(out["endpoint"])
+        if "domain" in out and out["domain"] is not None and not isinstance(out["domain"], str):
+            out["domain"] = str(out["domain"])
+
+        return out
 
     def giveFeedback(
         self,
         agentId: AgentId,
-        feedbackFile: Dict[str, Any],
-        idem: Optional[IdemKey] = None,
+        score: int,
+        tag1: Optional[str] = None,
+        tag2: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        feedbackFile: Optional[Dict[str, Any]] = None,
     ) -> Feedback:
         """Give feedback (maps 8004 endpoint)."""
-        # Parse agent ID
-        if ":" in agentId:
-            tokenId = int(agentId.split(":")[-1])
+        # Parse agentId into (chainId, tokenId)
+        agent_chain_id: Optional[int] = None
+        tokenId: int
+        if isinstance(agentId, str) and agentId.startswith("eip155:"):
+            parts = agentId.split(":")
+            if len(parts) != 3:
+                raise ValueError(f"Invalid AgentId (expected eip155:chainId:tokenId): {agentId}")
+            agent_chain_id = int(parts[1])
+            tokenId = int(parts[2])
+        elif isinstance(agentId, str) and ":" in agentId:
+            parts = agentId.split(":")
+            if len(parts) != 2:
+                raise ValueError(f"Invalid AgentId (expected chainId:tokenId): {agentId}")
+            agent_chain_id = int(parts[0])
+            tokenId = int(parts[1])
         else:
             tokenId = int(agentId)
+            agent_chain_id = int(self.web3_client.chain_id)
+
+        # Ensure we are submitting the tx on the agent's chain
+        if int(self.web3_client.chain_id) != int(agent_chain_id):
+            raise ValueError(
+                f"Chain mismatch for giveFeedback: agentId={agentId} targets chainId={agent_chain_id}, "
+                f"but web3 client is connected to chainId={self.web3_client.chain_id}. "
+                f"Initialize the SDK/Web3Client for chainId={agent_chain_id}."
+            )
         
         # Get client address (the one giving feedback)
         # Keep in checksum format for blockchain calls (web3.py requirement)
@@ -128,30 +117,94 @@ class FeedbackManager:
         except Exception as e:
             raise ValueError(f"Failed to get feedback index: {e}")
         
-        # Prepare on-chain data
-        score = feedbackFile.get("score", 0)  # Already in 0-100 range
-        tag1 = feedbackFile.get("tag1", "") or ""
-        tag2 = feedbackFile.get("tag2", "") or ""
-        endpoint = feedbackFile.get("endpoint", "") or ""
+        if score is None:
+            raise ValueError("score is required")
+        if not isinstance(score, int):
+            # Allow numeric strings / floats if passed accidentally
+            score = int(score)
+
+        tag1 = tag1 or ""
+        tag2 = tag2 or ""
+
+        feedback_file: Optional[Dict[str, Any]] = feedbackFile
+        if feedback_file is not None and not isinstance(feedback_file, dict):
+            raise TypeError(f"feedbackFile must be a dict when provided, got {type(feedback_file)}")
+
+        # Endpoint precedence: explicit arg > file endpoint > empty string
+        if endpoint:
+            endpoint_onchain = endpoint
+        elif feedback_file and isinstance(feedback_file.get("endpoint"), str) and feedback_file.get("endpoint"):
+            endpoint_onchain = feedback_file.get("endpoint")
+        else:
+            endpoint_onchain = ""
+
+        # If uploading a file and we have an explicit endpoint, inject it for consistency
+        if feedback_file is not None and endpoint and isinstance(endpoint, str):
+            feedback_file = dict(feedback_file)
+            feedback_file["endpoint"] = endpoint
         
         # Handle off-chain file storage
         feedbackUri = ""
         feedbackHash = b"\x00" * 32  # Default empty hash
         
-        if self.ipfs_client:
-            # Store feedback file on IPFS using Filecoin Pin
+        if feedback_file is not None:
+            if not self.ipfs_client:
+                raise ValueError("feedbackFile was provided, but no IPFS client is configured")
+
+            # Store an ERC-8004 compliant feedback file on IPFS (explicit opt-in)
             try:
                 logger.debug("Storing feedback file on IPFS")
-                cid = self.ipfs_client.add_json(feedbackFile)
+                # createdAt MUST be present in the off-chain file; use provided value if valid, else now (UTC).
+                created_at = feedback_file.get("createdAt")
+                if not isinstance(created_at, str) or not created_at:
+                    created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+                identity_registry_address = "0x0"
+                try:
+                    if self.identity_registry is not None:
+                        identity_registry_address = str(getattr(self.identity_registry, "address", "0x0"))
+                except Exception:
+                    identity_registry_address = "0x0"
+
+                # Remove any user-provided copies of the envelope keys; SDK-owned values must win
+                rich = dict(feedback_file)
+                for k in [
+                    "agentRegistry",
+                    "agentId",
+                    "clientAddress",
+                    "createdAt",
+                    "score",
+                    "tag1",
+                    "tag2",
+                    "endpoint",
+                ]:
+                    rich.pop(k, None)
+
+                file_for_storage: Dict[str, Any] = {
+                    # MUST fields (spec)
+                    "agentRegistry": f"eip155:{agent_chain_id}:{identity_registry_address}",
+                    "agentId": tokenId,
+                    "clientAddress": f"eip155:{agent_chain_id}:{clientAddress}",
+                    "createdAt": created_at,
+                    "score": int(score),
+
+                    # OPTIONAL fields that mirror on-chain
+                    **({"tag1": tag1} if tag1 else {}),
+                    **({"tag2": tag2} if tag2 else {}),
+                    **({"endpoint": endpoint_onchain} if endpoint_onchain else {}),
+
+                    # Rich/off-chain fields
+                    **rich,
+                }
+
+                cid = self.ipfs_client.addFeedbackFile(file_for_storage)
                 feedbackUri = f"ipfs://{cid}"
-                feedbackHash = self.web3_client.keccak256(json.dumps(feedbackFile, sort_keys=True).encode())
+                feedbackHash = self.web3_client.keccak256(
+                    json.dumps(file_for_storage, sort_keys=True).encode()
+                )
                 logger.debug(f"Feedback file stored on IPFS: {cid}")
             except Exception as e:
-                logger.warning(f"Failed to store feedback on IPFS: {e}")
-                # Continue without IPFS storage
-        elif feedbackFile.get("context") or feedbackFile.get("capability") or feedbackFile.get("name"):
-            # If we have rich data but no IPFS, we need to store it somewhere
-            raise ValueError("Rich feedback data requires IPFS client for storage")
+                raise ValueError(f"Failed to store feedback on IPFS: {e}")
         
         # Submit to blockchain with new signature: giveFeedback(agentId, score, tag1, tag2, endpoint, feedbackURI, feedbackHash)
         try:
@@ -162,7 +215,7 @@ class FeedbackManager:
                 score,
                 tag1,
                 tag2,
-                endpoint,
+                endpoint_onchain,
                 feedbackUri,
                 feedbackHash
             )
@@ -176,24 +229,25 @@ class FeedbackManager:
         # Create feedback object (address normalization happens in Feedback.create_id)
         feedbackId = Feedback.create_id(agentId, clientAddress, feedbackIndex)
         
+        ff: Dict[str, Any] = feedback_file or {}
         return Feedback(
             id=feedbackId,
             agentId=agentId,
             reviewer=clientAddress,  # create_id normalizes the ID; reviewer field can remain as-is
             score=int(score) if score and score > 0 else None,
             tags=[tag1, tag2] if tag1 or tag2 else [],
-            text=feedbackFile.get("text"),
-            context=feedbackFile.get("context"),
-            proofOfPayment=feedbackFile.get("proofOfPayment"),
+            text=ff.get("text"),
+            context=ff.get("context"),
+            proofOfPayment=ff.get("proofOfPayment"),
             fileURI=feedbackUri if feedbackUri else None,
-            endpoint=endpoint if endpoint else None,
+            endpoint=endpoint_onchain if endpoint_onchain else None,
             createdAt=int(time.time()),
             isRevoked=False,
             # Off-chain only fields
-            capability=feedbackFile.get("capability"),
-            name=feedbackFile.get("name"),
-            skill=feedbackFile.get("skill"),
-            task=feedbackFile.get("task")
+            capability=ff.get("capability"),
+            name=ff.get("name"),
+            skill=ff.get("skill"),
+            task=ff.get("task")
         )
 
     def getFeedback(
@@ -210,14 +264,14 @@ class FeedbackManager:
             except Exception as e:
                 logger.debug(f"Indexer/subgraph get_feedback failed, falling back to blockchain: {e}")
                 return self._get_feedback_from_blockchain(agentId, clientAddress, feedbackIndex)
-
+        
         if self.subgraph_client:
             try:
                 return self._get_feedback_from_subgraph(agentId, clientAddress, feedbackIndex)
             except Exception as e:
                 logger.debug(f"Subgraph get feedback failed, falling back to blockchain: {e}")
                 return self._get_feedback_from_blockchain(agentId, clientAddress, feedbackIndex)
-
+        
         return self._get_feedback_from_blockchain(agentId, clientAddress, feedbackIndex)
     
     def _get_feedback_from_subgraph(
@@ -267,9 +321,9 @@ class FeedbackManager:
             tag1 = feedback_data.get('tag1') or feedback_file.get('tag1')
             tag2 = feedback_data.get('tag2') or feedback_file.get('tag2')
             if isinstance(tag1, str) and tag1:
-                tags.append(tag1)
+                    tags.append(tag1)
             if isinstance(tag2, str) and tag2:
-                tags.append(tag2)
+                    tags.append(tag2)
             
             return Feedback(
                 id=Feedback.create_id(agentId, clientAddress, feedbackIndex),  # create_id now normalizes
@@ -287,7 +341,8 @@ class FeedbackManager:
                     'txHash': feedback_file.get('proofOfPaymentTxHash'),
                 } if feedback_file.get('proofOfPaymentFromAddress') else None,
                 fileURI=feedback_data.get('feedbackURI') or feedback_data.get('feedbackUri'),  # Handle both old and new field names
-                endpoint=feedback_data.get('endpoint'),
+                # Prefer on-chain endpoint; fall back to off-chain file endpoint if missing
+                endpoint=feedback_data.get('endpoint') or feedback_file.get('endpoint'),
                 createdAt=feedback_data.get('createdAt', int(time.time())),
                 answers=answers,
                 isRevoked=feedback_data.get('isRevoked', False),
@@ -509,9 +564,9 @@ class FeedbackManager:
             tag1 = fb_data.get('tag1') or feedback_file.get('tag1')
             tag2 = fb_data.get('tag2') or feedback_file.get('tag2')
             if isinstance(tag1, str) and tag1:
-                tags_list.append(tag1)
+                    tags_list.append(tag1)
             if isinstance(tag2, str) and tag2:
-                tags_list.append(tag2)
+                    tags_list.append(tag2)
             
             # Parse agentId from feedback ID
             feedback_id = fb_data['id']

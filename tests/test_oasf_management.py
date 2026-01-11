@@ -38,7 +38,7 @@ class TestOASFManagement:
             
             oasf_endpoint = oasf_endpoints[0]
             assert oasf_endpoint.value == "https://github.com/agntcy/oasf/"
-            assert oasf_endpoint.meta["version"] == "v0.8.0"
+            assert oasf_endpoint.meta["version"] == "0.8"
             assert "custom_skill/test_skill" in oasf_endpoint.meta["skills"]
 
     def test_add_skill_with_validation_valid(self):

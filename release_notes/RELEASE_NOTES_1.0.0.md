@@ -34,7 +34,9 @@ Key behavior:
 - For contract wallets (ERC-1271), provide `signature` bytes (the SDK cannot generate that signature without the wallet’s signing mechanism).
 
 ### `SDK.giveFeedback(...)`
-- Removed the deprecated `feedbackAuth` plumbing; feedback submission is permissionless per the updated spec.
+- Feedback submission is permissionless per the updated spec (no `feedbackAuth`).
+- **Breaking API change**: `giveFeedback` now takes the on-chain fields directly (`score`, `tag1`, `tag2`, `endpoint`) plus an optional `feedbackFile` for explicit IPFS upload.
+- New helper: `SDK.prepareFeedbackFile(...)` prepares the optional off-chain file payload only.
 
 ## Subgraph compatibility improvements
 Hosted subgraphs are not always upgraded in lockstep. The SDK now includes lightweight GraphQL compatibility fallbacks for:

@@ -42,13 +42,16 @@ def generateRandomData():
         'description': f"Created at {timestamp}",
         'image': f"https://example.com/image_{randomSuffix}.png",
         'mcpEndpoint': f"https://api.example.com/mcp/{randomSuffix}",
-        'mcpVersion': f"2025-06-{random.randint(1, 28)}",
+        # Latest MCP spec version (per ERC-8004 registration file examples)
+        'mcpVersion': "2025-06-18",
         'a2aEndpoint': f"https://api.example.com/a2a/{randomSuffix}.json",
-        'a2aVersion': f"0.{random.randint(30, 35)}",
+        # Latest A2A spec version (per ERC-8004 registration file examples)
+        'a2aVersion': "0.3.0",
         'ensName': f"test{randomSuffix}.eth",
-        'ensVersion': f"1.{random.randint(0, 9)}",
-        'active': True,
-        'x402support': False,
+        # Latest ENS endpoint version (per ERC-8004 registration file examples)
+        'ensVersion': "v1",
+        'active': False,
+        'x402support': True,
         'reputation': random.choice([True, False]),
         'cryptoEconomic': random.choice([True, False]),
         'teeAttestation': random.choice([True, False])
@@ -93,6 +96,9 @@ def main():
     agent.setMCP(testData['mcpEndpoint'], testData['mcpVersion'])
     agent.setA2A(testData['a2aEndpoint'], testData['a2aVersion'])
     agent.setENS(testData['ensName'], testData['ensVersion'])
+    # OASF skills/domains (validated against bundled taxonomy)
+    agent.addSkill("advanced_reasoning_planning/strategic_planning", validate_oasf=True)
+    agent.addDomain("finance_and_business/investment_services", validate_oasf=True)
     # Note: setAgentWallet() is on-chain only and requires the NEW wallet to sign.
     # For testing, use CLIENT_PRIVATE_KEY as the second wallet and let the SDK build/sign the typed data.
     if not CLIENT_PRIVATE_KEY:
@@ -155,11 +161,20 @@ def main():
         description=testData['description'] + " - UPDATED",
         image=f"https://example.com/image_{random.randint(1000, 9999)}_updated.png"
     )
-    agent.setMCP(f"https://api.example.com/mcp/{random.randint(10000, 99999)}", f"2025-06-{random.randint(1, 28)}")
-    agent.setA2A(f"https://api.example.com/a2a/{random.randint(10000, 99999)}.json", f"0.{random.randint(30, 35)}")
+    agent.setMCP(
+        f"https://api.example.com/mcp/{random.randint(10000, 99999)}",
+        "2025-06-18",
+    )
+    agent.setA2A(
+        f"https://api.example.com/a2a/{random.randint(10000, 99999)}.json",
+        "0.3.0",
+    )
     # Keep using the second wallet. This should be a no-op (wallet already set), but exercises the flow.
     agent.setAgentWallet(second_wallet_address, sdk.chainId, new_wallet_signer=CLIENT_PRIVATE_KEY)
-    agent.setENS(f"{testData['ensName']}.updated", f"1.{random.randint(0, 9)}")
+    agent.setENS(f"{testData['ensName']}.updated", "v1")
+    # Update OASF skills/domains as well (validated)
+    agent.addSkill("advanced_reasoning_planning/strategic_planning", validate_oasf=True)
+    agent.addDomain("finance_and_business/investment_services", validate_oasf=True)
     agent.setActive(False)
     agent.setX402Support(True)
     agent.setTrust(

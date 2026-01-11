@@ -491,111 +491,8 @@ class SDK:
 
         return self.indexer.search_agents(params, sort, page_size, cursor)
 
-    # Feedback methods
-    def prepareFeedback(
-        self,
-        agentId: AgentId,
-        score: Optional[int] = None,  # 0-100
-        tags: List[str] = None,
-        text: Optional[str] = None,
-        capability: Optional[str] = None,
-        name: Optional[str] = None,
-        skill: Optional[str] = None,
-        task: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None,
-        proofOfPayment: Optional[Dict[str, Any]] = None,
-        extra: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Prepare feedback file (local file/object)."""
-        return self.feedback_manager.prepareFeedback(
-            agentId=agentId,
-            score=score,
-            tags=tags,
-            text=text,
-            capability=capability,
-            name=name,
-            skill=skill,
-            task=task,
-            context=context,
-            proofOfPayment=proofOfPayment,
-            extra=extra
-        )
+    # Feedback methods are defined later in this class (single authoritative API).
 
-    def giveFeedback(
-        self,
-        agentId: AgentId,
-        feedbackFile: Dict[str, Any],
-        idem: Optional[IdemKey] = None,
-        feedback_auth: Optional[bytes] = None,
-    ) -> Feedback:
-        """Give feedback (maps 8004 endpoint)."""
-        return self.feedback_manager.giveFeedback(
-            agentId=agentId,
-            feedbackFile=feedbackFile,
-            idem=idem,
-            feedback_auth=feedback_auth
-        )
-
-    def getFeedback(self, feedbackId: str) -> Feedback:
-        """Get single feedback by ID string."""
-        # Parse feedback ID
-        agentId, clientAddress, feedbackIndex = Feedback.from_id_string(feedbackId)
-        return self.feedback_manager.getFeedback(agentId, clientAddress, feedbackIndex)
-
-    def searchFeedback(
-        self,
-        agentId: AgentId,
-        reviewers: Optional[List[Address]] = None,
-        tags: Optional[List[str]] = None,
-        capabilities: Optional[List[str]] = None,
-        skills: Optional[List[str]] = None,
-        tasks: Optional[List[str]] = None,
-        names: Optional[List[str]] = None,
-        minScore: Optional[int] = None,
-        maxScore: Optional[int] = None,
-        include_revoked: bool = False,
-        first: int = 100,
-        skip: int = 0,
-    ) -> List[Feedback]:
-        """Search feedback for an agent."""
-        return self.feedback_manager.searchFeedback(
-            agentId=agentId,
-            clientAddresses=reviewers,
-            tags=tags,
-            capabilities=capabilities,
-            skills=skills,
-            tasks=tasks,
-            names=names,
-            minScore=minScore,
-            maxScore=maxScore,
-            include_revoked=include_revoked,
-            first=first,
-            skip=skip
-        )
-
-    def revokeFeedback(
-        self,
-        feedbackId: str,
-        reason: Optional[str] = None,
-        idem: Optional[IdemKey] = None,
-    ) -> Dict[str, Any]:
-        """Revoke feedback."""
-        # Parse feedback ID
-        agentId, clientAddress, feedbackIndex = Feedback.from_id_string(feedbackId)
-        return self.feedback_manager.revokeFeedback(agentId, feedbackIndex)
-
-    def appendResponse(
-        self,
-        feedbackId: str,
-        response: Dict[str, Any],
-        idem: Optional[IdemKey] = None,
-    ) -> Feedback:
-        """Append a response/follow-up to existing feedback."""
-        # Parse feedback ID
-        agentId, clientAddress, feedbackIndex = Feedback.from_id_string(feedbackId)
-        return self.feedback_manager.appendResponse(agentId, clientAddress, feedbackIndex, response)
-
-    
     def searchAgentsByReputation(
         self,
         agents: Optional[List[AgentId]] = None,
@@ -884,46 +781,35 @@ class SDK:
         }
     
     # Feedback methods - delegate to feedback_manager
-    def signFeedbackAuth(
-        self,
-        agentId: "AgentId",
-        clientAddress: "Address",
-        indexLimit: Optional[int] = None,
-        expiryHours: int = 24,
-    ) -> bytes:
-        """Sign feedback authorization for a client."""
-        return self.feedback_manager.signFeedbackAuth(
-            agentId, clientAddress, indexLimit, expiryHours
-        )
-    
-    def prepareFeedback(
-        self,
-        agentId: "AgentId",
-        score: Optional[int] = None,  # 0-100
-        tags: List[str] = None,
-        text: Optional[str] = None,
-        capability: Optional[str] = None,
-        name: Optional[str] = None,
-        skill: Optional[str] = None,
-        task: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None,
-        proofOfPayment: Optional[Dict[str, Any]] = None,
-        extra: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Prepare feedback file (local file/object) according to spec."""
-        return self.feedback_manager.prepareFeedback(
-            agentId, score, tags, text, capability, name, skill, task, context, proofOfPayment, extra
-        )
+    def prepareFeedbackFile(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """Prepare an off-chain feedback file payload.
+        
+        This is intentionally off-chain-only; it does not attempt to represent
+        the on-chain fields (score/tag1/tag2/endpoint-on-chain).
+        """
+        return self.feedback_manager.prepareFeedbackFile(input)
     
     def giveFeedback(
         self,
         agentId: "AgentId",
-        feedbackFile: Dict[str, Any],
-        idem: Optional["IdemKey"] = None,
+        score: int,
+        tag1: Optional[str] = None,
+        tag2: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        feedbackFile: Optional[Dict[str, Any]] = None,
     ) -> "Feedback":
-        """Give feedback (maps 8004 endpoint)."""
+        """Give feedback (on-chain first; optional off-chain file upload).
+        
+        - If feedbackFile is None: submit on-chain only (no upload even if IPFS is configured).
+        - If feedbackFile is provided: requires IPFS configured; uploads and commits URI/hash on-chain.
+        """
         return self.feedback_manager.giveFeedback(
-            agentId, feedbackFile, idem
+            agentId=agentId,
+            score=score,
+            tag1=tag1,
+            tag2=tag2,
+            endpoint=endpoint,
+            feedbackFile=feedbackFile,
         )
     
     def getFeedback(
@@ -935,6 +821,37 @@ class SDK:
         """Get feedback (maps 8004 endpoint)."""
         return self.feedback_manager.getFeedback(
             agentId, clientAddress, feedbackIndex
+        )
+
+    def searchFeedback(
+        self,
+        agentId: "AgentId",
+        reviewers: Optional[List["Address"]] = None,
+        tags: Optional[List[str]] = None,
+        capabilities: Optional[List[str]] = None,
+        skills: Optional[List[str]] = None,
+        tasks: Optional[List[str]] = None,
+        names: Optional[List[str]] = None,
+        minScore: Optional[int] = None,
+        maxScore: Optional[int] = None,
+        include_revoked: bool = False,
+        first: int = 100,
+        skip: int = 0,
+    ) -> List["Feedback"]:
+        """Search feedback for an agent."""
+        return self.feedback_manager.searchFeedback(
+            agentId=agentId,
+            clientAddresses=reviewers,
+            tags=tags,
+            capabilities=capabilities,
+            skills=skills,
+            tasks=tasks,
+            names=names,
+            minScore=minScore,
+            maxScore=maxScore,
+            include_revoked=include_revoked,
+            first=first,
+            skip=skip,
         )
     
     def revokeFeedback(

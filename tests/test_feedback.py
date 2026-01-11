@@ -135,31 +135,52 @@ def main():
     
     feedbackEntries = []
     numFeedback = 1
+
+    # On-chain-only feedback (explicitly no file upload)
+    print("\n  Submitting on-chain-only feedback (no feedbackFile):")
+    onchain_only = clientSdk.giveFeedback(
+        agentId=AGENT_ID,
+        score=1,
+        tag1="onchain",
+        tag2="only",
+        endpoint="https://example.com/onchain-only",
+        feedbackFile=None,
+    )
+    if onchain_only.fileURI:
+        raise AssertionError(
+            f"Expected on-chain-only feedback to have no fileURI, got: {onchain_only.fileURI}"
+        )
     
     for i in range(numFeedback):
         print(f"\n  Submitting Feedback #{i+1}:")
         feedbackData = generateFeedbackData(i+1)
         
-        # Prepare feedback file
-        feedbackFile = clientSdk.prepareFeedback(
-            agentId=AGENT_ID,
-            score=feedbackData['score'],
-            tags=feedbackData['tags'],
-            capability=feedbackData['capability'],
-            skill=feedbackData['skill'],
-            context=feedbackData['context']
-        )
+        # Prepare off-chain feedback file (optional rich data)
+        feedbackFile = clientSdk.prepareFeedbackFile({
+            "capability": feedbackData.get("capability"),
+            "skill": feedbackData.get("skill"),
+            "context": feedbackData.get("context"),
+            "text": feedbackData.get("text"),
+        })
+
+        tags = feedbackData.get("tags") or []
+        tag1 = tags[0] if len(tags) > 0 else None
+        tag2 = tags[1] if len(tags) > 1 else None
         
         print(f"  - Score: {feedbackData['score']}/100")
         print(f"  - Tags: {feedbackData['tags']}")
         print(f"  - Capability: {feedbackData['capability']}")
         print(f"  - Skill: {feedbackData['skill']}")
         
-        # Submit feedback (no feedbackAuth needed)
+        # Submit feedback
         try:
             feedback = clientSdk.giveFeedback(
                 agentId=AGENT_ID,
-                feedbackFile=feedbackFile
+                score=feedbackData["score"],
+                tag1=tag1,
+                tag2=tag2,
+                endpoint=feedbackData.get("endpoint"),
+                feedbackFile=feedbackFile,
             )
             
             # Extract actual feedback index from the returned Feedback object
