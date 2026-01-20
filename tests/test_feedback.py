@@ -5,7 +5,7 @@ Submits feedback from a client to an existing agent and verifies data integrity.
 Flow:
 1. Load existing agent by ID
 2. Client submits multiple feedback entries
-3. Verify feedback data consistency (score, tags, capability, skill)
+3. Verify feedback data consistency (value, tags, capability, skill)
 4. Wait for blockchain finalization
 5. Verify feedback can be retrieved (if SDK supports it)
 
@@ -31,7 +31,16 @@ logging.getLogger('agent0_sdk').setLevel(logging.DEBUG)
 logging.getLogger('agent0_sdk.core').setLevel(logging.DEBUG)
 
 from agent0_sdk import SDK
-from config import CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, PINATA_JWT, SUBGRAPH_URL, AGENT_ID, CLIENT_PRIVATE_KEY, print_config
+from tests.config import (
+    CHAIN_ID,
+    RPC_URL,
+    AGENT_PRIVATE_KEY,
+    PINATA_JWT,
+    SUBGRAPH_URL,
+    AGENT_ID,
+    CLIENT_PRIVATE_KEY,
+    print_config,
+)
 
 # Client configuration (different wallet)
 # CLIENT_PRIVATE_KEY is now loaded from config.py (which reads from .env file)
@@ -75,7 +84,7 @@ def generateFeedbackData(index: int):
     ]
     
     return {
-        'score': random.choice(scores),
+        'value': random.choice(scores),
         'tags': random.choice(tags_sets),
         'capability': random.choice(capabilities),
         'skill': random.choice(skills),
@@ -140,7 +149,7 @@ def main():
     print("\n  Submitting on-chain-only feedback (no feedbackFile):")
     onchain_only = clientSdk.giveFeedback(
         agentId=AGENT_ID,
-        score=1,
+        value=1,
         tag1="onchain",
         tag2="only",
         endpoint="https://example.com/onchain-only",
@@ -167,7 +176,7 @@ def main():
         tag1 = tags[0] if len(tags) > 0 else None
         tag2 = tags[1] if len(tags) > 1 else None
         
-        print(f"  - Score: {feedbackData['score']}/100")
+        print(f"  - Value: {feedbackData['value']}")
         print(f"  - Tags: {feedbackData['tags']}")
         print(f"  - Capability: {feedbackData['capability']}")
         print(f"  - Skill: {feedbackData['skill']}")
@@ -176,7 +185,7 @@ def main():
         try:
             feedback = clientSdk.giveFeedback(
                 agentId=AGENT_ID,
-                score=feedbackData["score"],
+                value=feedbackData["value"],
                 tag1=tag1,
                 tag2=tag2,
                 endpoint=feedbackData.get("endpoint"),
@@ -259,7 +268,7 @@ def main():
         
         # Verify feedback object fields
         checks = [
-            ('Score', data['score'], feedback.score),
+            ('Value', data['value'], feedback.value),
             ('Tags', data['tags'], feedback.tags),
             ('Capability', data['capability'], feedback.capability),
             ('Skill', data['skill'], feedback.skill),
@@ -307,7 +316,7 @@ def main():
             )
             
             print(f"    ✅ Retrieved feedback successfully")
-            print(f"    - Score: {retrievedFeedback.score}")
+            print(f"    - Value: {retrievedFeedback.value}")
             print(f"    - Tags: {retrievedFeedback.tags}")
             print(f"    - Capability: {retrievedFeedback.capability}")
             print(f"    - Skill: {retrievedFeedback.skill}")
@@ -318,7 +327,7 @@ def main():
             
             # Verify retrieved feedback matches original (subgraph tags may be legacy/hashed)
             expected = entry['data']
-            if retrievedFeedback.score == expected['score'] and \
+            if retrievedFeedback.value == expected['value'] and \
                retrievedFeedback.capability == expected['capability'] and \
                retrievedFeedback.skill == expected['skill']:
                 print(f"    ✅ Retrieved feedback matches original submission")
@@ -347,7 +356,7 @@ def main():
         print(f"    ✅ Found {len(results)} feedback entry/entries with capability '{testCapability}'")
         if results:
             for fb in results:
-                print(f"      - Score: {fb.score}, Tags: {fb.tags}")
+                print(f"      - Value: {fb.value}, Tags: {fb.tags}")
     except Exception as e:
         print(f"    ❌ Failed to search feedback by capability: {e}")
         allMatch = False
@@ -365,7 +374,7 @@ def main():
         print(f"    ✅ Found {len(results)} feedback entry/entries with skill '{testSkill}'")
         if results:
             for fb in results:
-                print(f"      - Score: {fb.score}, Tags: {fb.tags}")
+                print(f"      - Value: {fb.value}, Tags: {fb.tags}")
     except Exception as e:
         print(f"    ❌ Failed to search feedback by skill: {e}")
         allMatch = False
@@ -383,27 +392,27 @@ def main():
         print(f"    ✅ Found {len(results)} feedback entry/entries with tags {testTags}")
         if results:
             for fb in results:
-                print(f"      - Score: {fb.score}, Capability: {fb.capability}")
+                print(f"      - Value: {fb.value}, Capability: {fb.capability}")
     except Exception as e:
         print(f"    ❌ Failed to search feedback by tags: {e}")
         allMatch = False
     
-    # Test 4: Search by score range
-    print("\n  Test 4: Search feedback by score range (75-95)")
+    # Test 4: Search by value range
+    print("\n  Test 4: Search feedback by value range (75-95)")
     try:
         results = agentSdkWithSigner.searchFeedback(
             agentId=AGENT_ID,
-            minScore=75,
-            maxScore=95,
+            minValue=75,
+            maxValue=95,
             first=10,
             skip=0
         )
-        print(f"    ✅ Found {len(results)} feedback entry/entries with score between 75-95")
+        print(f"    ✅ Found {len(results)} feedback entry/entries with value between 75-95")
         if results:
-            scores = sorted([fb.score for fb in results if fb.score])
-            print(f"      - Scores found: {scores}")
+            values = sorted([fb.value for fb in results if fb.value is not None])
+            print(f"      - Values found: {values}")
     except Exception as e:
-        print(f"    ❌ Failed to search feedback by score range: {e}")
+        print(f"    ❌ Failed to search feedback by value range: {e}")
         allMatch = False
     
     # Final results

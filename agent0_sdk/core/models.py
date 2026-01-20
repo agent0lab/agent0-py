@@ -185,7 +185,9 @@ class Feedback:
     id: tuple  # (agentId, clientAddress, feedbackIndex) - tuple for efficiency
     agentId: AgentId
     reviewer: Address
-    score: Optional[int]  # 0-100
+    # ReputationRegistry Jan 2026: decimal value computed as (value:int256 / 10^valueDecimals).
+    # SDK exposes ONLY the computed value.
+    value: Optional[float]
     tags: List[str] = field(default_factory=list)
     text: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
@@ -291,8 +293,8 @@ class SearchFeedbackParams:
     tasks: Optional[List[str]] = None
     names: Optional[List[str]] = None  # MCP tool/resource/prompt names
     endpoint: Optional[str] = None  # Filter by endpoint URI
-    minScore: Optional[int] = None  # 0-100
-    maxScore: Optional[int] = None  # 0-100
+    minValue: Optional[float] = None
+    maxValue: Optional[float] = None
     includeRevoked: bool = False
     
     def to_dict(self) -> Dict[str, Any]:

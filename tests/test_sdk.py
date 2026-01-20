@@ -235,7 +235,7 @@ class TestAgent:
             # setAgentWallet is on-chain only and requires agent to be registered
             valid_address = "0x1234567890abcdef1234567890abcdef12345678"
             with pytest.raises(ValueError):
-            agent.setAgentWallet(valid_address)
+                agent.setAgentWallet(valid_address)
     
     def test_agent_json_serialization(self):
         """Test agent JSON serialization."""

@@ -26,7 +26,7 @@ logging.basicConfig(
 logging.getLogger('agent0_sdk').setLevel(logging.DEBUG)
 logging.getLogger('agent0_sdk.core').setLevel(logging.DEBUG)
 
-from config import (
+from tests.config import (
     CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, PINATA_JWT, SUBGRAPH_URL,
     print_config
 )

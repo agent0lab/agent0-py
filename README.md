@@ -146,7 +146,7 @@ agent_summary = sdk.getAgent("11155111:123")
 # On-chain-only feedback (no off-chain upload, even if IPFS is configured)
 feedback = sdk.giveFeedback(
     agentId="11155111:123",
-    score=85,  # 0-100 (mandatory)
+    value=85,  # number|string
     tag1="data_analyst",  # Optional: tags are strings
     tag2="finance",
     endpoint="https://example.com/endpoint",  # Optional: saved on-chain
@@ -162,7 +162,7 @@ feedback_file = sdk.prepareFeedbackFile({
 
 feedback = sdk.giveFeedback(
     agentId="11155111:123",
-    score=85,
+    value=85,
     tag1="data_analyst",
     tag2="finance",
     endpoint="https://example.com/endpoint",
@@ -173,13 +173,13 @@ feedback = sdk.giveFeedback(
 results = sdk.searchFeedback(
     agentId="11155111:123",
     capabilities=["tools"],
-    minScore=80,
-    maxScore=100
+    minValue=80,
+    maxValue=100
 )
 
 # Get reputation summary
 summary = sdk.getReputationSummary("11155111:123")
-print(f"Average score: {summary['averageScore']}")
+print(f"Average value: {summary['averageValue']}")
 ```
 
 ## IPFS Configuration Options

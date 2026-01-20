@@ -87,7 +87,7 @@ class AgentIndexer:
     def _create_default_embeddings(self):
         """Create default embeddings model."""
         try:
-            from sentence_transformers import SentenceTransformer
+            from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
             return SentenceTransformer('all-MiniLM-L6-v2')
         except ImportError:
             # Return None if sentence-transformers is not available
@@ -260,7 +260,7 @@ class AgentIndexer:
             raise ValueError(f"Failed to get agent data: {e}")
 
         # Load registration file
-        registration_data = await self._load_registration_data(token_uri)
+        registration_data = await self._load_registration_data(agent_uri)
         
         # Create agent summary
         summary = self._create_agent_summary(
@@ -1082,7 +1082,7 @@ class AgentIndexer:
             id=Feedback.create_id(agentId, clientAddress, feedbackIndex),
             agentId=agentId,
             reviewer=self.web3_client.normalize_address(clientAddress),
-            score=feedback_data.get('score'),
+            value=float(feedback_data.get("value")) if feedback_data.get("value") is not None else None,
             tags=tags,
             text=feedback_file.get('text'),
             capability=feedback_file.get('capability'),
@@ -1113,8 +1113,8 @@ class AgentIndexer:
         skills: Optional[List[str]] = None,
         tasks: Optional[List[str]] = None,
         names: Optional[List[str]] = None,
-        minScore: Optional[int] = None,
-        maxScore: Optional[int] = None,
+        minValue: Optional[float] = None,
+        maxValue: Optional[float] = None,
         include_revoked: bool = False,
         first: int = 100,
         skip: int = 0,
@@ -1140,7 +1140,7 @@ class AgentIndexer:
         if subgraph_client:
             return self._search_feedback_subgraph(
                 full_agent_id, clientAddresses, tags, capabilities, skills, tasks, names,
-                minScore, maxScore, include_revoked, first, skip, subgraph_client
+                minValue, maxValue, include_revoked, first, skip, subgraph_client
             )
         
         # Fallback not implemented (would require blockchain queries)
@@ -1156,8 +1156,8 @@ class AgentIndexer:
         skills: Optional[List[str]],
         tasks: Optional[List[str]],
         names: Optional[List[str]],
-        minScore: Optional[int],
-        maxScore: Optional[int],
+        minValue: Optional[float],
+        maxValue: Optional[float],
         include_revoked: bool,
         first: int,
         skip: int,
@@ -1178,8 +1178,8 @@ class AgentIndexer:
             skills=skills,
             tasks=tasks,
             names=names,
-            minScore=minScore,
-            maxScore=maxScore,
+            minValue=minValue,
+            maxValue=maxValue,
             includeRevoked=include_revoked
         )
         
@@ -1665,7 +1665,7 @@ class AgentIndexer:
         - updatedAt (timestamp)
         - totalFeedback (count)
         - name (alphabetical)
-        - averageScore (reputation, if available)
+        - averageValue (reputation, if available)
         """
         if not sort or len(sort) == 0:
             # Default: sort by createdAt descending (newest first)
@@ -1700,9 +1700,9 @@ class AgentIndexer:
                 reg_file = agent.get('registrationFile', {})
                 return reg_file.get('name', '').lower()
 
-            elif field == 'averageScore':
-                # If reputation search was done, averageScore may be available
-                return agent.get('averageScore', 0)
+            elif field == 'averageValue':
+                # If reputation search was done, averageValue may be available
+                return agent.get('averageValue', 0)
 
             else:
                 logger.warning(f"Unknown sort field: {field}, defaulting to createdAt")

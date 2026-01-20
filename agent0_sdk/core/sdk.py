@@ -502,7 +502,7 @@ class SDK:
         skills: Optional[List[str]] = None,
         tasks: Optional[List[str]] = None,
         names: Optional[List[str]] = None,
-        minAverageScore: Optional[int] = None,  # 0-100
+        minAverageValue: Optional[float] = None,
         includeRevoked: bool = False,
         page_size: int = 50,
         cursor: Optional[str] = None,
@@ -522,7 +522,7 @@ class SDK:
                     return asyncio.run(
                         self._search_agents_by_reputation_across_chains(
                             agents, tags, reviewers, capabilities, skills, tasks, names,
-                            minAverageScore, includeRevoked, page_size, cursor, sort, chains
+                            minAverageValue, includeRevoked, page_size, cursor, sort, chains
                         )
                     )
         
@@ -556,7 +556,7 @@ class SDK:
                 skills=skills,
                 tasks=tasks,
                 names=names,
-                minAverageScore=minAverageScore,
+                minAverageValue=minAverageValue,
                 includeRevoked=includeRevoked,
                 first=page_size,
                 skip=skip,
@@ -591,7 +591,7 @@ class SDK:
                     mcpResources=reg_file.get('mcpResources', []),
                     active=reg_file.get('active', True),
                     x402support=reg_file.get('x402support', False),
-                    extras={'averageScore': agent_data.get('averageScore')}
+                    extras={'averageValue': agent_data.get('averageValue')}
                 )
                 results.append(agent_summary)
             
@@ -610,7 +610,7 @@ class SDK:
         skills: Optional[List[str]],
         tasks: Optional[List[str]],
         names: Optional[List[str]],
-        minAverageScore: Optional[int],
+        minAverageValue: Optional[float],
         includeRevoked: bool,
         page_size: int,
         cursor: Optional[str],
@@ -668,7 +668,7 @@ class SDK:
                         skills=skills,
                         tasks=tasks,
                         names=names,
-                        minAverageScore=minAverageScore,
+                        minAverageValue=minAverageValue,
                         includeRevoked=includeRevoked,
                         first=page_size * 3,  # Fetch extra to allow for filtering/sorting
                         skip=0,  # We'll handle pagination after aggregation
@@ -748,14 +748,14 @@ class SDK:
                 mcpResources=reg_file.get('mcpResources', []),
                 active=reg_file.get('active', True),
                 x402support=reg_file.get('x402support', False),
-                extras={'averageScore': agent_data.get('averageScore')}
+                extras={'averageValue': agent_data.get('averageValue')}
             )
             results.append(agent_summary)
         
-        # Sort by averageScore (descending) if available, otherwise by createdAt
+        # Sort by averageValue (descending) if available, otherwise by createdAt
         results.sort(
             key=lambda x: (
-                x.extras.get('averageScore') if x.extras.get('averageScore') is not None else 0,
+                x.extras.get('averageValue') if x.extras.get('averageValue') is not None else 0,
                 x.chainId,
                 x.agentId
             ),
@@ -785,14 +785,14 @@ class SDK:
         """Prepare an off-chain feedback file payload.
         
         This is intentionally off-chain-only; it does not attempt to represent
-        the on-chain fields (score/tag1/tag2/endpoint-on-chain).
+        the on-chain fields (value/tag1/tag2/endpoint-on-chain).
         """
         return self.feedback_manager.prepareFeedbackFile(input)
     
     def giveFeedback(
         self,
         agentId: "AgentId",
-        score: int,
+        value: Union[int, float, str],
         tag1: Optional[str] = None,
         tag2: Optional[str] = None,
         endpoint: Optional[str] = None,
@@ -805,7 +805,7 @@ class SDK:
         """
         return self.feedback_manager.giveFeedback(
             agentId=agentId,
-            score=score,
+            value=value,
             tag1=tag1,
             tag2=tag2,
             endpoint=endpoint,
@@ -832,8 +832,8 @@ class SDK:
         skills: Optional[List[str]] = None,
         tasks: Optional[List[str]] = None,
         names: Optional[List[str]] = None,
-        minScore: Optional[int] = None,
-        maxScore: Optional[int] = None,
+        minValue: Optional[float] = None,
+        maxValue: Optional[float] = None,
         include_revoked: bool = False,
         first: int = 100,
         skip: int = 0,
@@ -847,8 +847,8 @@ class SDK:
             skills=skills,
             tasks=tasks,
             names=names,
-            minScore=minScore,
-            maxScore=maxScore,
+            minValue=minValue,
+            maxValue=maxValue,
             include_revoked=include_revoked,
             first=first,
             skip=skip,

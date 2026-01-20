@@ -21,7 +21,7 @@ logging.getLogger('agent0_sdk').setLevel(logging.DEBUG)
 logging.getLogger('agent0_sdk.core').setLevel(logging.DEBUG)
 
 from agent0_sdk import SDK
-from config import CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, CLIENT_PRIVATE_KEY, PINATA_JWT, print_config
+from tests.config import CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, CLIENT_PRIVATE_KEY, PINATA_JWT, print_config
 from eth_account import Account
 
 

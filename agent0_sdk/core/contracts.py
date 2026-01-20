@@ -159,7 +159,7 @@ IDENTITY_REGISTRY_ABI = [
             {"internalType": "uint256", "name": "agentId", "type": "uint256"}
         ],
         "name": "getAgentWallet",
-        "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "outputs": [{"internalType": "bytes", "name": "", "type": "bytes"}],
         "stateMutability": "view",
         "type": "function"
     },
@@ -171,6 +171,15 @@ IDENTITY_REGISTRY_ABI = [
             {"internalType": "bytes", "name": "signature", "type": "bytes"}
         ],
         "name": "setAgentWallet",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {"internalType": "uint256", "name": "agentId", "type": "uint256"}
+        ],
+        "name": "unsetAgentWallet",
         "outputs": [],
         "stateMutability": "nonpayable",
         "type": "function"
@@ -222,7 +231,8 @@ REPUTATION_REGISTRY_ABI = [
     {
         "inputs": [
             {"internalType": "uint256", "name": "agentId", "type": "uint256"},
-            {"internalType": "uint8", "name": "score", "type": "uint8"},
+            {"internalType": "int256", "name": "value", "type": "int256"},
+            {"internalType": "uint8", "name": "valueDecimals", "type": "uint8"},
             {"internalType": "string", "name": "tag1", "type": "string"},
             {"internalType": "string", "name": "tag2", "type": "string"},
             {"internalType": "string", "name": "endpoint", "type": "string"},
@@ -275,7 +285,8 @@ REPUTATION_REGISTRY_ABI = [
         ],
         "name": "readFeedback",
         "outputs": [
-            {"internalType": "uint8", "name": "score", "type": "uint8"},
+            {"internalType": "int256", "name": "value", "type": "int256"},
+            {"internalType": "uint8", "name": "valueDecimals", "type": "uint8"},
             {"internalType": "string", "name": "tag1", "type": "string"},
             {"internalType": "string", "name": "tag2", "type": "string"},
             {"internalType": "bool", "name": "isRevoked", "type": "bool"}
@@ -293,7 +304,8 @@ REPUTATION_REGISTRY_ABI = [
         "name": "getSummary",
         "outputs": [
             {"internalType": "uint64", "name": "count", "type": "uint64"},
-            {"internalType": "uint8", "name": "averageScore", "type": "uint8"}
+            {"internalType": "int256", "name": "summaryValue", "type": "int256"},
+            {"internalType": "uint8", "name": "summaryValueDecimals", "type": "uint8"}
         ],
         "stateMutability": "view",
         "type": "function"
@@ -308,9 +320,10 @@ REPUTATION_REGISTRY_ABI = [
         ],
         "name": "readAllFeedback",
         "outputs": [
-            {"internalType": "address[]", "name": "clientAddresses", "type": "address[]"},
+            {"internalType": "address[]", "name": "clients", "type": "address[]"},
             {"internalType": "uint64[]", "name": "feedbackIndexes", "type": "uint64[]"},
-            {"internalType": "uint8[]", "name": "scores", "type": "uint8[]"},
+            {"internalType": "int256[]", "name": "values", "type": "int256[]"},
+            {"internalType": "uint8[]", "name": "valueDecimals", "type": "uint8[]"},
             {"internalType": "string[]", "name": "tag1s", "type": "string[]"},
             {"internalType": "string[]", "name": "tag2s", "type": "string[]"},
             {"internalType": "bool[]", "name": "revokedStatuses", "type": "bool[]"}
@@ -345,7 +358,8 @@ REPUTATION_REGISTRY_ABI = [
             {"indexed": True, "internalType": "uint256", "name": "agentId", "type": "uint256"},
             {"indexed": True, "internalType": "address", "name": "clientAddress", "type": "address"},
             {"indexed": False, "internalType": "uint64", "name": "feedbackIndex", "type": "uint64"},
-            {"indexed": False, "internalType": "uint8", "name": "score", "type": "uint8"},
+            {"indexed": False, "internalType": "int256", "name": "value", "type": "int256"},
+            {"indexed": False, "internalType": "uint8", "name": "valueDecimals", "type": "uint8"},
             {"indexed": True, "internalType": "string", "name": "indexedTag1", "type": "string"},
             {"indexed": False, "internalType": "string", "name": "tag1", "type": "string"},
             {"indexed": False, "internalType": "string", "name": "tag2", "type": "string"},

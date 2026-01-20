@@ -10,7 +10,7 @@ Flow:
 5. Search agents by ENS domain
 6. Search agents by active status
 7. Combine multiple filters (capabilities + skills)
-8. Search agents by reputation with minimum average score
+8. Search agents by reputation with minimum average value
 9. Search agents by reputation with specific tags
 10. Search agents by reputation with capability filtering
 11. Advanced: Find top-rated agents with specific skills
@@ -42,7 +42,7 @@ logging.getLogger('agent0_sdk').setLevel(logging.DEBUG)
 logging.getLogger('agent0_sdk.core').setLevel(logging.DEBUG)
 
 from agent0_sdk import SDK, SearchParams
-from config import CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, SUBGRAPH_URL, AGENT_ID, print_config
+from tests.config import CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, SUBGRAPH_URL, AGENT_ID, print_config
 
 
 def main():
@@ -157,20 +157,20 @@ def main():
     except Exception as e:
         print(f"❌ Failed to search with multiple filters: {e}")
     
-    print(f"\n📍 Step 8: Search Agents by Reputation (Minimum Average Score)")
+    print(f"\n📍 Step 8: Search Agents by Reputation (Minimum Average Value)")
     print("-" * 60)
     try:
-        results = sdk.searchAgentsByReputation(minAverageScore=80)
+        results = sdk.searchAgentsByReputation(minAverageValue=80)
         agents = results.get('items', [])
-        print(f"✅ Found {len(agents)} agent(s) with average score >= 80")
+        print(f"✅ Found {len(agents)} agent(s) with average value >= 80")
         for i, agent in enumerate(agents[:3], 1):
             # AgentSummary object - use attributes, not dict.get()
-            avg_score = agent.extras.get('averageScore', 'N/A') if agent.extras else 'N/A'
+            avg_value = agent.extras.get('averageValue', 'N/A') if agent.extras else 'N/A'
             print(f"   {i}. {agent.name}")
-            print(f"      Average Score: {avg_score}")
+            print(f"      Average Value: {avg_value}")
             print(f"      Agent ID: {agent.agentId}")
     except Exception as e:
-        print(f"❌ Failed to search by reputation score: {e}")
+        print(f"❌ Failed to search by reputation value: {e}")
     
     print(f"\n📍 Step 9: Search Agents by Reputation with Specific Tags")
     print("-" * 60)
@@ -180,15 +180,15 @@ def main():
         # which may affect results, but at least the query will execute
         results = sdk.searchAgentsByReputation(
             tags=["enterprise"],
-            minAverageScore=0,  # No threshold to see any results
+            minAverageValue=0,  # No threshold to see any results
             includeRevoked=True  # Workaround for GraphQL query builder issue
         )
         agents = results.get('items', [])
         print(f"✅ Found {len(agents)} agent(s) with 'enterprise' tag")
         for i, agent in enumerate(agents[:3], 1):
             # AgentSummary object - use attributes
-            avg_score = agent.extras.get('averageScore', 'N/A') if agent.extras else 'N/A'
-            print(f"   {i}. {agent.name} - Avg: {avg_score}")
+            avg_value = agent.extras.get('averageValue', 'N/A') if agent.extras else 'N/A'
+            print(f"   {i}. {agent.name} - Avg: {avg_value}")
     except Exception as e:
         print(f"❌ Failed to search by reputation tags: {e}")
     
@@ -198,14 +198,14 @@ def main():
         # Using capabilities that actually exist in feedback: code_generation, problem_solving, data_analysis
         results = sdk.searchAgentsByReputation(
             capabilities=["code_generation"],
-            minAverageScore=0  # No threshold to see any results
+            minAverageValue=0  # No threshold to see any results
         )
         agents = results.get('items', [])
         print(f"✅ Found {len(agents)} agent(s) with 'code_generation' capability")
         for i, agent in enumerate(agents[:3], 1):
-            avg_score = agent.extras.get('averageScore', 'N/A') if hasattr(agent, 'extras') and agent.extras else 'N/A'
+            avg_value = agent.extras.get('averageValue', 'N/A') if hasattr(agent, 'extras') and agent.extras else 'N/A'
             print(f"   {i}. {agent.name}")
-            print(f"      Avg Score: {avg_score}")
+            print(f"      Avg Value: {avg_value}")
     except Exception as e:
         print(f"❌ Failed to search by reputation with capabilities: {e}")
     
@@ -215,15 +215,15 @@ def main():
         # Using skills that actually exist in feedback: python, machine_learning, cloud_computing, web_development
         results = sdk.searchAgentsByReputation(
             skills=["python"],
-            minAverageScore=0  # No threshold to see any results
+            minAverageValue=0  # No threshold to see any results
         )
         agents = results.get('items', [])
         print(f"✅ Found {len(agents)} agent(s) with 'python' skill")
         for i, agent in enumerate(agents[:3], 1):
             # AgentSummary object - use attributes
-            avg_score = agent.extras.get('averageScore', 'N/A') if agent.extras else 'N/A'
+            avg_value = agent.extras.get('averageValue', 'N/A') if agent.extras else 'N/A'
             print(f"   {i}. {agent.name}")
-            print(f"      Average Score: {avg_score}")
+            print(f"      Average Value: {avg_value}")
             if agent.a2aSkills:
                 print(f"      Skills: {', '.join(agent.a2aSkills[:3])}")
     except Exception as e:

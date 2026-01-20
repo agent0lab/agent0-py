@@ -172,7 +172,7 @@ class TestFeedback:
             id=("1:123", "0x456", 1),
             agentId="1:123",
             reviewer="0x456",
-            score=4.5,
+            value=4.5,
             tags=["quality", "speed"],
             text="Great service!",
             capability="tools"
@@ -182,7 +182,7 @@ class TestFeedback:
         assert feedback.id_string == "1:123:0x456:1"
         assert feedback.agentId == "1:123"
         assert feedback.reviewer == "0x456"
-        assert feedback.score == 4.5
+        assert feedback.value == 4.5
         assert feedback.tags == ["quality", "speed"]
         assert feedback.text == "Great service!"
         assert feedback.capability == "tools"

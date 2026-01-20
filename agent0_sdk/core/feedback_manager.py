@@ -16,6 +16,7 @@ from .models import (
 )
 from .web3_client import Web3Client
 from .ipfs_client import IPFSClient
+from .value_encoding import encode_feedback_value, decode_feedback_value
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ class FeedbackManager:
         """Prepare an off-chain feedback file payload (no on-chain fields).
         
         This intentionally does NOT attempt to represent on-chain fields like:
-        score/tag1/tag2/endpoint (on-chain value), or registry-derived fields.
+        value/tag1/tag2/endpoint (on-chain value), or registry-derived fields.
         
         It may validate/normalize and remove None values.
         """
@@ -67,7 +68,7 @@ class FeedbackManager:
     def giveFeedback(
         self,
         agentId: AgentId,
-        score: int,
+        value: Union[int, float, str],
         tag1: Optional[str] = None,
         tag2: Optional[str] = None,
         endpoint: Optional[str] = None,
@@ -117,11 +118,7 @@ class FeedbackManager:
         except Exception as e:
             raise ValueError(f"Failed to get feedback index: {e}")
         
-        if score is None:
-            raise ValueError("score is required")
-        if not isinstance(score, int):
-            # Allow numeric strings / floats if passed accidentally
-            score = int(score)
+        value_raw, value_decimals, _normalized = encode_feedback_value(value)
 
         tag1 = tag1 or ""
         tag2 = tag2 or ""
@@ -173,7 +170,8 @@ class FeedbackManager:
                     "agentId",
                     "clientAddress",
                     "createdAt",
-                    "score",
+                    "value",
+                    "valueDecimals",
                     "tag1",
                     "tag2",
                     "endpoint",
@@ -186,7 +184,9 @@ class FeedbackManager:
                     "agentId": tokenId,
                     "clientAddress": f"eip155:{agent_chain_id}:{clientAddress}",
                     "createdAt": created_at,
-                    "score": int(score),
+                    # On-chain fields (store raw+decimals for precision)
+                    "value": str(value_raw),
+                    "valueDecimals": int(value_decimals),
 
                     # OPTIONAL fields that mirror on-chain
                     **({"tag1": tag1} if tag1 else {}),
@@ -206,13 +206,14 @@ class FeedbackManager:
             except Exception as e:
                 raise ValueError(f"Failed to store feedback on IPFS: {e}")
         
-        # Submit to blockchain with new signature: giveFeedback(agentId, score, tag1, tag2, endpoint, feedbackURI, feedbackHash)
+        # Submit to blockchain with new signature: giveFeedback(agentId, value, valueDecimals, tag1, tag2, endpoint, feedbackURI, feedbackHash)
         try:
             txHash = self.web3_client.transact_contract(
                 self.reputation_registry,
                 "giveFeedback",
                 tokenId,
-                score,
+                value_raw,
+                value_decimals,
                 tag1,
                 tag2,
                 endpoint_onchain,
@@ -234,7 +235,7 @@ class FeedbackManager:
             id=feedbackId,
             agentId=agentId,
             reviewer=clientAddress,  # create_id normalizes the ID; reviewer field can remain as-is
-            score=int(score) if score and score > 0 else None,
+            value=decode_feedback_value(value_raw, value_decimals),
             tags=[tag1, tag2] if tag1 or tag2 else [],
             text=ff.get("text"),
             context=ff.get("context"),
@@ -329,7 +330,7 @@ class FeedbackManager:
                 id=Feedback.create_id(agentId, clientAddress, feedbackIndex),  # create_id now normalizes
                 agentId=agentId,
                 reviewer=self.web3_client.normalize_address(clientAddress),  # Also normalize reviewer field
-                score=feedback_data.get('score'),
+                value=float(feedback_data.get("value")) if feedback_data.get("value") is not None else None,
                 tags=tags,
                 text=feedback_file.get('text'),
                 capability=feedback_file.get('capability'),
@@ -377,7 +378,7 @@ class FeedbackManager:
                 feedbackIndex
             )
             
-            score, tag1, tag2, is_revoked = result
+            value_raw, value_decimals, tag1, tag2, is_revoked = result
             
             # Create feedback object (normalize address for consistency)
             normalized_address = self.web3_client.normalize_address(clientAddress)
@@ -394,7 +395,7 @@ class FeedbackManager:
                 id=feedbackId,
                 agentId=agentId,
                 reviewer=normalized_address,
-                score=int(score) if score and score > 0 else None,
+                value=decode_feedback_value(int(value_raw), int(value_decimals)),
                 tags=tags,
                 text=None,  # Not stored on-chain
                 capability=None,  # Not stored on-chain
@@ -418,8 +419,8 @@ class FeedbackManager:
         skills: Optional[List[str]] = None,
         tasks: Optional[List[str]] = None,
         names: Optional[List[str]] = None,
-        minScore: Optional[int] = None,
-        maxScore: Optional[int] = None,
+        minValue: Optional[float] = None,
+        maxValue: Optional[float] = None,
         include_revoked: bool = False,
         first: int = 100,
         skip: int = 0,
@@ -431,14 +432,14 @@ class FeedbackManager:
             # This enables future semantic search capabilities
             return self.indexer.search_feedback(
                 agentId, clientAddresses, tags, capabilities, skills, tasks, names,
-                minScore, maxScore, include_revoked, first, skip
+                minValue, maxValue, include_revoked, first, skip
             )
         
         # Fallback: direct subgraph access (if indexer not available)
         if self.subgraph_client:
             return self._search_feedback_subgraph(
                 agentId, clientAddresses, tags, capabilities, skills, tasks, names,
-                minScore, maxScore, include_revoked, first, skip
+                minValue, maxValue, include_revoked, first, skip
             )
         
         # Fallback to blockchain
@@ -454,7 +455,7 @@ class FeedbackManager:
             tag1_filter = tags[0] if tags else ""
             tag2_filter = tags[1] if tags and len(tags) > 1 else ""
             
-            # Read from blockchain - new signature returns: (clientAddresses, feedbackIndexes, scores, tag1s, tag2s, revokedStatuses)
+            # Read from blockchain - signature returns: (clients, feedbackIndexes, values, valueDecimals, tag1s, tag2s, revokedStatuses)
             result = self.web3_client.call_contract(
                 self.reputation_registry,
                 "readAllFeedback",
@@ -465,7 +466,7 @@ class FeedbackManager:
                 include_revoked
             )
             
-            clients, feedback_indexes, scores, tag1s, tag2s, revoked_statuses = result
+            clients, feedback_indexes, values, value_decimals, tag1s, tag2s, revoked_statuses = result
             
             # Convert to Feedback objects
             feedbacks = []
@@ -484,7 +485,7 @@ class FeedbackManager:
                     id=feedbackId,
                     agentId=agentId,
                     reviewer=clients[i],
-                    score=int(scores[i]) if scores[i] and scores[i] > 0 else None,
+                    value=decode_feedback_value(int(values[i]), int(value_decimals[i])),
                     tags=tags_list,
                     text=None,
                     capability=None,
@@ -511,8 +512,8 @@ class FeedbackManager:
         skills: Optional[List[str]],
         tasks: Optional[List[str]],
         names: Optional[List[str]],
-        minScore: Optional[int],
-        maxScore: Optional[int],
+        minValue: Optional[float],
+        maxValue: Optional[float],
         include_revoked: bool,
         first: int,
         skip: int,
@@ -527,8 +528,8 @@ class FeedbackManager:
             skills=skills,
             tasks=tasks,
             names=names,
-            minScore=minScore,
-            maxScore=maxScore,
+            minValue=minValue,
+            maxValue=maxValue,
             includeRevoked=include_revoked
         )
         
@@ -584,7 +585,7 @@ class FeedbackManager:
                 id=Feedback.create_id(agent_id_str, client_addr, feedback_idx),
                 agentId=agent_id_str,
                 reviewer=client_addr,
-                score=fb_data.get('score'),
+                value=float(fb_data.get("value")) if fb_data.get("value") is not None else None,
                 tags=tags_list,
                 text=feedback_file.get('text'),
                 capability=feedback_file.get('capability'),
@@ -757,14 +758,15 @@ class FeedbackManager:
                 tag2_str
             )
             
-            count, average_score = result
+            count, summary_value, summary_value_decimals = result
+            average_value = decode_feedback_value(int(summary_value), int(summary_value_decimals))
             
             # If no grouping requested, return simple summary
             if not groupBy:
                 return {
                     "agentId": agentId,
                     "count": count,
-                    "averageScore": float(average_score) / 100.0 if average_score > 0 else 0.0,
+                    "averageValue": average_value,
                     "filters": {
                         "clientAddresses": clientAddresses,
                         "tag1": tag1,
@@ -786,7 +788,7 @@ class FeedbackManager:
             return {
                 "agentId": agentId,
                 "totalCount": count,
-                "totalAverageScore": float(average_score) / 100.0 if average_score > 0 else 0.0,
+                "totalAverageValue": average_value,
                 "groupedData": grouped_data,
                 "filters": {
                     "clientAddresses": clientAddresses,
@@ -828,15 +830,15 @@ class FeedbackManager:
         
         # Calculate summary statistics
         count = len(all_feedback)
-        scores = [fb.score for fb in all_feedback if fb.score is not None]
-        average_score = sum(scores) / len(scores) if scores else 0.0
+        values = [fb.value for fb in all_feedback if fb.value is not None]
+        average_value = sum(values) / len(values) if values else 0.0
         
         # If no grouping requested, return simple summary
         if not groupBy:
             return {
                 "agentId": agentId,
                 "count": count,
-                "averageScore": average_score,
+                "averageValue": average_value,
                 "filters": {
                     "clientAddresses": clientAddresses,
                     "tag1": tag1,
@@ -850,7 +852,7 @@ class FeedbackManager:
         return {
             "agentId": agentId,
             "totalCount": count,
-            "totalAverageScore": average_score,
+            "totalAverageValue": average_value,
             "groupedData": grouped_data,
             "filters": {
                 "clientAddresses": clientAddresses,
@@ -871,23 +873,23 @@ class FeedbackManager:
             if group_key not in grouped:
                 grouped[group_key] = {
                     "count": 0,
-                    "totalScore": 0.0,
-                    "averageScore": 0.0,
-                    "scores": [],
+                    "totalValue": 0.0,
+                    "averageValue": 0.0,
+                    "values": [],
                     "feedback": []
                 }
             
             # Add feedback to group
             grouped[group_key]["count"] += 1
-            if feedback.score is not None:
-                grouped[group_key]["totalScore"] += feedback.score
-                grouped[group_key]["scores"].append(feedback.score)
+            if feedback.value is not None:
+                grouped[group_key]["totalValue"] += float(feedback.value)
+                grouped[group_key]["values"].append(float(feedback.value))
             grouped[group_key]["feedback"].append(feedback)
         
         # Calculate averages for each group
         for group_data in grouped.values():
             if group_data["count"] > 0:
-                group_data["averageScore"] = group_data["totalScore"] / group_data["count"]
+                group_data["averageValue"] = group_data["totalValue"] / group_data["count"]
         
         return grouped
     
