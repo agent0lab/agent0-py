@@ -232,10 +232,10 @@ class TestAgent:
             assert agent.description == "An updated agent"
             assert agent.image == "https://example.com/new-image.png"
             
-            # setAgentWallet is on-chain only and requires agent to be registered
+            # setWallet is on-chain only and requires agent to be registered
             valid_address = "0x1234567890abcdef1234567890abcdef12345678"
             with pytest.raises(ValueError):
-                agent.setAgentWallet(valid_address)
+                agent.setWallet(valid_address)
     
     def test_agent_json_serialization(self):
         """Test agent JSON serialization."""

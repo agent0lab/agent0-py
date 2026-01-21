@@ -99,7 +99,7 @@ def main():
     # OASF skills/domains (validated against bundled taxonomy)
     agent.addSkill("advanced_reasoning_planning/strategic_planning", validate_oasf=True)
     agent.addDomain("finance_and_business/investment_services", validate_oasf=True)
-    # Note: setAgentWallet() is on-chain only and requires the NEW wallet to sign.
+    # Note: setWallet() is on-chain only and requires the NEW wallet to sign.
     # For testing, use CLIENT_PRIVATE_KEY as the second wallet and let the SDK build/sign the typed data.
     if not CLIENT_PRIVATE_KEY:
         raise ValueError("CLIENT_PRIVATE_KEY must be set in .env file for this test")
@@ -111,7 +111,7 @@ def main():
 
     # Set agent wallet (SDK builds + signs typed data using CLIENT_PRIVATE_KEY)
     # Store walletChainId as current chain for local bookkeeping
-    agent.setAgentWallet(second_wallet_address, sdk.chainId, new_wallet_signer=CLIENT_PRIVATE_KEY)
+    agent.setWallet(second_wallet_address, sdk.chainId, new_wallet_signer=CLIENT_PRIVATE_KEY)
     agent.setActive(testData['active'])
     agent.setX402Support(testData['x402support'])
     agent.setTrust(
@@ -170,7 +170,7 @@ def main():
         "0.3.0",
     )
     # Keep using the second wallet. This should be a no-op (wallet already set), but exercises the flow.
-    agent.setAgentWallet(second_wallet_address, sdk.chainId, new_wallet_signer=CLIENT_PRIVATE_KEY)
+    agent.setWallet(second_wallet_address, sdk.chainId, new_wallet_signer=CLIENT_PRIVATE_KEY)
     agent.setENS(f"{testData['ensName']}.updated", "v1")
     # Update OASF skills/domains as well (validated)
     agent.addSkill("advanced_reasoning_planning/strategic_planning", validate_oasf=True)

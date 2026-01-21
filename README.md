@@ -97,7 +97,7 @@ print(f"Agent URI: {agent.agentURI}")  # e.g., "ipfs://Qm..."
 # - On mint/registration, `agentWallet` defaults to the current owner address.
 # - Call this only if you want a DIFFERENT wallet (or after a transfer, since the wallet resets to zero).
 # - Transaction is sent by the SDK signer (agent owner), but the signature must be produced by the NEW wallet.
-agent.setAgentWallet(
+agent.setWallet(
     "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
     chainId=11155111,
     new_wallet_signer=os.getenv("NEW_WALLET_PRIVATE_KEY"),

@@ -179,11 +179,11 @@ class Agent:
         """Collect all metadata entries for registration.
         
         Note: agentWallet is now a reserved metadata key and cannot be set via setMetadata().
-        It must be set separately using setAgentWallet() with EIP-712 signature verification.
+        It must be set separately using setWallet() with signature verification.
         """
         metadata_entries = []
         
-        # Note: agentWallet is no longer set via metadata - it's now reserved and managed via setAgentWallet()
+        # Note: agentWallet is no longer set via metadata - it's now reserved and managed via setWallet()
         
         # Add ENS name metadata
         if self.ensEndpoint:
@@ -491,7 +491,7 @@ class Agent:
         self.registration_file.updatedAt = int(time.time())
         return self
 
-    def setAgentWallet(
+    def setWallet(
         self,
         new_wallet: Address,
         chainId: Optional[int] = None,
@@ -500,10 +500,9 @@ class Agent:
         deadline: Optional[int] = None,
         signature: Optional[bytes] = None,
     ) -> 'Agent':
-        """Set agent wallet address on-chain (ERC-8004 agentWallet).
+        """Set agent wallet address on-chain (verified agentWallet).
 
-        This method is **on-chain only**. The `agentWallet` is a verified attribute and must be set via
-        the IdentityRegistry `setAgentWallet` function.
+        This method is **on-chain only**. The `agentWallet` is a verified attribute.
 
         EOAs: provide `new_wallet_signer` (private key string or eth-account account) OR ensure the SDK
         signer address matches `new_wallet` so the SDK can auto-sign.\n
@@ -517,7 +516,7 @@ class Agent:
             deadline: Signature deadline timestamp. Defaults to now+60s (must be <= now+5min per contract).
             signature: Raw signature bytes (intended for ERC-1271 / external signing only)
         """
-        # Breaking/clean: this API is only meaningful for already-registered agents.
+        # This API is only meaningful for already-registered agents.
         if not self.agentId:
             raise ValueError(
                 "Cannot set agent wallet before the agent is registered on-chain. "
@@ -625,7 +624,7 @@ class Agent:
             if recovered.lower() != addr.lower():
                 raise ValueError(f"Signature verification failed: recovered {recovered} but expected {addr}")
         
-        # Call setAgentWallet on the contract
+        # Submit on-chain tx (tx sender is SDK signer: owner/operator)
         try:
             txHash = self.sdk.web3_client.transact_contract(
                 self.sdk.identity_registry,
@@ -649,6 +648,52 @@ class Agent:
         self.registration_file.updatedAt = int(time.time())
         self._last_registered_wallet = addr
         
+        return self
+
+    def unsetWallet(self) -> 'Agent':
+        """Unset agent wallet address on-chain (verified agentWallet).
+
+        This method is **on-chain only** and requires the agent to be registered.
+        It unsets the on-chain value and clears the local
+        `walletAddress` / `walletChainId` fields.
+        """
+        if not self.agentId:
+            raise ValueError(
+                "Cannot unset agent wallet before the agent is registered on-chain. "
+                "Call agent.register(...) / agent.registerIPFS() first to obtain agentId."
+            )
+
+        # Parse agent ID (tokenId is always the last segment)
+        agent_id_int = int(self.agentId.split(":")[-1]) if ":" in self.agentId else int(self.agentId)
+
+        # Optional short-circuit if already unset (best-effort).
+        try:
+            current_wallet = self.sdk.web3_client.call_contract(
+                self.sdk.identity_registry,
+                "getAgentWallet",
+                agent_id_int
+            )
+            if current_wallet in (b"", "0x", "", None):
+                self.registration_file.walletAddress = None
+                self.registration_file.walletChainId = None
+                self.registration_file.updatedAt = int(time.time())
+                return self
+        except Exception:
+            pass
+
+        try:
+            txHash = self.sdk.web3_client.transact_contract(
+                self.sdk.identity_registry,
+                "unsetAgentWallet",
+                agent_id_int
+            )
+            _receipt = self.sdk.web3_client.wait_for_transaction(txHash)
+        except Exception as e:
+            raise ValueError(f"Failed to unset agent wallet on-chain: {e}")
+
+        self.registration_file.walletAddress = None
+        self.registration_file.walletChainId = None
+        self.registration_file.updatedAt = int(time.time())
         return self
 
     def setENS(self, name: str, version: str = "1.0") -> 'Agent':
@@ -973,7 +1018,7 @@ class Agent:
         """Transfer agent ownership.
         
         Note: When an agent is transferred, the agentWallet is automatically reset
-        to the zero address on-chain. The new owner must call setAgentWallet() to
+        to the zero address on-chain. The new owner must call setWallet() to
         set a new wallet address with EIP-712 signature verification.
         """
         if not self.registration_file.agentId:
@@ -1042,7 +1087,7 @@ class Agent:
         Only the current owner can transfer the agent.
         
         Note: When an agent is transferred, the agentWallet is automatically reset
-        to the zero address on-chain. The new owner must call setAgentWallet() to
+        to the zero address on-chain. The new owner must call setWallet() to
         set a new wallet address with EIP-712 signature verification.
         
         Args:

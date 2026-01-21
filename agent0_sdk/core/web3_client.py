@@ -209,7 +209,7 @@ class Web3Client:
         verifying_contract: str,
         chain_id: int,
     ) -> Dict[str, Any]:
-        """Build EIP-712 typed data for ERC-8004 IdentityRegistry setAgentWallet.
+        """Build EIP-712 typed data for the agent wallet verification message.
 
         Contract expects:
         - domain: name="ERC8004IdentityRegistry", version="1"

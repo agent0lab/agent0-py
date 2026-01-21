@@ -26,8 +26,8 @@ Key behavior:
 
 ## Breaking changes
 
-### `Agent.setAgentWallet(...)` is now on-chain only
-- Calling `setAgentWallet` **before registration** now raises an error.
+### `Agent.setWallet(...)` is now on-chain only
+- Calling `setWallet` **before registration** now raises an error.
 - The SDK builds the correct typed data internally; for EOAs you can provide:
   - `new_wallet_signer` (private key string / eth-account account) to auto-sign
   - or omit it if the SDK signer address equals the new wallet address
@@ -44,6 +44,6 @@ Hosted subgraphs are not always upgraded in lockstep. The SDK now includes light
 - missing `AgentRegistrationFile.agentWallet` / `agentWalletChainId` fields
 
 ## Tests & scripts updated
-- Integration scripts updated to the new `setAgentWallet` semantics and simplified signing flows.
+- Integration scripts updated to the new `setWallet` semantics and simplified signing flows.
 - Search/feedback paths updated to tolerate real-world subgraph schema differences.
 

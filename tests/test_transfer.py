@@ -108,7 +108,7 @@ def main():
     # Set wallet on-chain after registration (requires EIP-712 signature).
     # Since ownerA_address matches current SDK signer, it can auto-sign.
     print("\n🔍 Setting agent wallet on-chain...")
-    agent.setAgentWallet(ownerA_address, CHAIN_ID)
+    agent.setWallet(ownerA_address, CHAIN_ID)
     print(f"✅ Agent wallet set on-chain: {ownerA_address}")
     
     # Verify wallet is set on-chain

@@ -89,7 +89,7 @@ class RegistrationFile:
             endpoints.append(endpoint_dict)
         
         # Note: agentWallet is no longer included in endpoints array.
-        # It's now a reserved on-chain metadata key managed via setAgentWallet().
+        # It's now a reserved on-chain metadata key managed via Agent.setWallet().
         
         # Build registrations array
         registrations = []

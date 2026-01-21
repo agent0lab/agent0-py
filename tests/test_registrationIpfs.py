@@ -80,7 +80,7 @@ def main():
     # OASF skills/domains (validated against bundled taxonomy)
     agent.addSkill("advanced_reasoning_planning/strategic_planning", validate_oasf=True)
     agent.addDomain("finance_and_business/investment_services", validate_oasf=True)
-    # Note: setAgentWallet() is on-chain only; do NOT call it before registration.
+    # Note: setWallet() is on-chain only; do NOT call it before registration.
     agent.setActive(testData['active'])
     agent.setX402Support(testData['x402support'])
     agent.setTrust(
@@ -124,7 +124,7 @@ def main():
         f"https://api.example.com/a2a/{random.randint(10000, 99999)}.json",
         "0.3.0",
     )
-    # Note: After registration, setAgentWallet() requires EIP-712 signature from the NEW wallet.
+    # Note: After registration, setWallet() requires EIP-712 signature from the NEW wallet.
     # For testing, set the wallet to a second address derived from CLIENT_PRIVATE_KEY and let SDK sign.
     if not CLIENT_PRIVATE_KEY:
         raise ValueError("CLIENT_PRIVATE_KEY must be set in .env file for this test")
@@ -132,7 +132,7 @@ def main():
     second_wallet_account = Account.from_key(CLIENT_PRIVATE_KEY)
     second_wallet_address = second_wallet_account.address
     print(f"✅ Using second wallet address (from CLIENT_PRIVATE_KEY): {second_wallet_address}")
-    agent.setAgentWallet(
+    agent.setWallet(
         second_wallet_address,
         random.choice([1, 11155111, 8453, 137, 42161]),
         new_wallet_signer=CLIENT_PRIVATE_KEY,
