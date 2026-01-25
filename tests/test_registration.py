@@ -14,6 +14,8 @@ import time
 import random
 import json
 import sys
+import os
+import pytest
 
 # Configure logging: root logger at WARNING to suppress noisy dependencies
 logging.basicConfig(
@@ -31,6 +33,7 @@ from agent0_sdk import SDK
 from tests.config import CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, CLIENT_PRIVATE_KEY, print_config
 from eth_account import Account
 
+RUN_LIVE_TESTS = os.getenv("RUN_LIVE_TESTS", "0") != "0"
 
 def generateRandomData():
     """Generate random test data for the agent."""
@@ -83,8 +86,9 @@ def main():
     
     # Register with mock URI to get agentId
     mockUri = "https://example.com/agents/registration.json"
-    agent.register(mockUri)
-    agentId = agent.agentId
+    reg_tx = agent.register(mockUri)
+    reg_file = reg_tx.wait_confirmed(timeout=180).result
+    agentId = reg_file.agentId
     print(f"✅ Registered: ID={agentId}")
     print(f"   Mock URI: {mockUri}")
     
@@ -101,9 +105,6 @@ def main():
     agent.addDomain("finance_and_business/investment_services", validate_oasf=True)
     # Note: setWallet() is on-chain only and requires the NEW wallet to sign.
     # For testing, use CLIENT_PRIVATE_KEY as the second wallet and let the SDK build/sign the typed data.
-    if not CLIENT_PRIVATE_KEY:
-        raise ValueError("CLIENT_PRIVATE_KEY must be set in .env file for this test")
-    
     # Create account from CLIENT_PRIVATE_KEY to get address and sign (second wallet)
     second_wallet_account = Account.from_key(CLIENT_PRIVATE_KEY)
     second_wallet_address = second_wallet_account.address
@@ -111,7 +112,9 @@ def main():
 
     # Set agent wallet (SDK builds + signs typed data using CLIENT_PRIVATE_KEY)
     # Store walletChainId as current chain for local bookkeeping
-    agent.setWallet(second_wallet_address, sdk.chainId, new_wallet_signer=CLIENT_PRIVATE_KEY)
+    wallet_tx = agent.setWallet(second_wallet_address, sdk.chainId, new_wallet_signer=CLIENT_PRIVATE_KEY)
+    if wallet_tx is not None:
+        wallet_tx.wait_confirmed(timeout=180)
     agent.setActive(testData['active'])
     agent.setX402Support(testData['x402support'])
     agent.setTrust(
@@ -198,7 +201,8 @@ def main():
     with open(filenameUpdated, 'w') as f:
         f.write(registrationJsonUpdated)
     
-    agent.register(mockUri)
+    update_tx = agent.register(mockUri)
+    update_tx.wait_confirmed(timeout=180)
     print(f"✅ Updated & re-registered")
     print(f"   Updated registration file: {filenameUpdated}")
     
@@ -292,4 +296,18 @@ if __name__ == "__main__":
         print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
-        exit(1)
+        raise
+
+
+@pytest.mark.integration
+def test_registration_http_live():
+    if not RUN_LIVE_TESTS:
+        pytest.skip("Set RUN_LIVE_TESTS=1 to enable live integration tests")
+    if not RPC_URL or not RPC_URL.strip():
+        pytest.skip("RPC_URL not set")
+    if not AGENT_PRIVATE_KEY or not AGENT_PRIVATE_KEY.strip():
+        pytest.skip("AGENT_PRIVATE_KEY not set")
+    if not CLIENT_PRIVATE_KEY or not CLIENT_PRIVATE_KEY.strip():
+        pytest.skip("CLIENT_PRIVATE_KEY not set")
+
+    main()

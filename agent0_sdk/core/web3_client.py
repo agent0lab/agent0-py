@@ -5,6 +5,7 @@ Web3 integration layer for smart contract interactions.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 
 try:
@@ -99,9 +100,48 @@ class Web3Client:
         
         return tx_hash.hex()
 
-    def wait_for_transaction(self, tx_hash: str, timeout: int = 60) -> Dict[str, Any]:
-        """Wait for transaction to be mined."""
-        return self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
+    def wait_for_transaction(
+        self,
+        tx_hash: str,
+        timeout: int = 60,
+        confirmations: int = 1,
+        throw_on_revert: bool = True,
+    ) -> Dict[str, Any]:
+        """Wait for transaction to be mined, optionally waiting for additional confirmations."""
+        if confirmations < 1:
+            raise ValueError("confirmations must be >= 1")
+
+        start = time.time()
+        receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
+
+        if throw_on_revert:
+            status = receipt.get("status")
+            # Most chains return 1 for success, 0 for revert (may be int or HexBytes-like).
+            try:
+                status_int = int(status)
+            except Exception:
+                try:
+                    status_int = int(status.hex(), 16)  # type: ignore[attr-defined]
+                except Exception:
+                    status_int = 1  # if unknown, don't falsely throw
+            if status_int == 0:
+                raise ValueError(f"Transaction reverted: {tx_hash}")
+
+        if confirmations > 1:
+            block_number = receipt.get("blockNumber")
+            if block_number is not None:
+                target_block = int(block_number) + (confirmations - 1)
+                while True:
+                    current = int(self.w3.eth.block_number)
+                    if current >= target_block:
+                        break
+                    if time.time() - start > timeout:
+                        raise TimeoutError(
+                            f"Timed out waiting for confirmations (tx={tx_hash}, confirmations={confirmations})"
+                        )
+                    time.sleep(1.0)
+
+        return receipt
 
     def get_events(
         self,

@@ -1,7 +1,7 @@
 """
 Value encoding utilities for ReputationRegistry (Jan 2026).
 
-On-chain representation: (value:int256, valueDecimals:uint8)
+On-chain representation: (value:int128, valueDecimals:uint8)
 Human representation:    value / 10^valueDecimals
 """
 
@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 getcontext().prec = 120
 
 MAX_DECIMALS = 18
-# Solidity constant (raw int256 magnitude)
-MAX_ABS_VALUE_RAW = 10**50
+# Solidity constant (raw int128 magnitude). Contract enforces abs(value) <= 1e38.
+MAX_ABS_VALUE_RAW = 10**38
 
 
 def encode_feedback_value(input_value: Union[int, float, str, Decimal]) -> Tuple[int, int, str]:

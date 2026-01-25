@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent0-sdk"
-version = "1.2.0"
+version = "1.4.0"
 description = "Python SDK for agent portability, discovery and trust based on ERC-8004"
 authors = [
     {name = "Agent0 Team", email = "team@ag0.xyz"}
@@ -87,3 +87,6 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v"
+markers = [
+    "integration: live/on-chain/IPFS/subgraph integration tests (skipped unless RUN_LIVE_TESTS=1 and required env vars are set)",
+]

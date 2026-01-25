@@ -24,16 +24,21 @@ from .core.models import (
 try:
     from .core.sdk import SDK
     from .core.agent import Agent
+    from .core.transaction_handle import TransactionHandle, TransactionMined
     _sdk_available = True
 except ImportError:
     SDK = None
     Agent = None
+    TransactionHandle = None
+    TransactionMined = None
     _sdk_available = False
 
-__version__ = "1.2.0"
+__version__ = "1.4.0"
 __all__ = [
     "SDK",
     "Agent",
+    "TransactionHandle",
+    "TransactionMined",
     "AgentId",
     "ChainId", 
     "Address",

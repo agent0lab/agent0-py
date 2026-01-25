@@ -17,6 +17,7 @@ from .models import (
 from .web3_client import Web3Client
 from .ipfs_client import IPFSClient
 from .value_encoding import encode_feedback_value, decode_feedback_value
+from .transaction_handle import TransactionHandle
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class FeedbackManager:
         tag2: Optional[str] = None,
         endpoint: Optional[str] = None,
         feedbackFile: Optional[Dict[str, Any]] = None,
-    ) -> Feedback:
+    ) -> TransactionHandle[Feedback]:
         """Give feedback (maps 8004 endpoint)."""
         # Parse agentId into (chainId, tokenId)
         agent_chain_id: Optional[int] = None
@@ -185,7 +186,7 @@ class FeedbackManager:
                     "clientAddress": f"eip155:{agent_chain_id}:{clientAddress}",
                     "createdAt": created_at,
                     # On-chain fields (store raw+decimals for precision)
-                    "value": str(value_raw),
+                    "value": int(value_raw),
                     "valueDecimals": int(value_decimals),
 
                     # OPTIONAL fields that mirror on-chain
@@ -220,35 +221,34 @@ class FeedbackManager:
                 feedbackUri,
                 feedbackHash
             )
-            
-            # Wait for transaction confirmation
-            receipt = self.web3_client.wait_for_transaction(txHash)
-            
         except Exception as e:
             raise ValueError(f"Failed to submit feedback to blockchain: {e}")
-        
-        # Create feedback object (address normalization happens in Feedback.create_id)
+
+        # Create a tx handle; build the Feedback object on confirmation.
         feedbackId = Feedback.create_id(agentId, clientAddress, feedbackIndex)
-        
         ff: Dict[str, Any] = feedback_file or {}
-        return Feedback(
-            id=feedbackId,
-            agentId=agentId,
-            reviewer=clientAddress,  # create_id normalizes the ID; reviewer field can remain as-is
-            value=decode_feedback_value(value_raw, value_decimals),
-            tags=[tag1, tag2] if tag1 or tag2 else [],
-            text=ff.get("text"),
-            context=ff.get("context"),
-            proofOfPayment=ff.get("proofOfPayment"),
-            fileURI=feedbackUri if feedbackUri else None,
-            endpoint=endpoint_onchain if endpoint_onchain else None,
-            createdAt=int(time.time()),
-            isRevoked=False,
-            # Off-chain only fields
-            capability=ff.get("capability"),
-            name=ff.get("name"),
-            skill=ff.get("skill"),
-            task=ff.get("task")
+
+        return TransactionHandle(
+            web3_client=self.web3_client,
+            tx_hash=txHash,
+            compute_result=lambda _receipt: Feedback(
+                id=feedbackId,
+                agentId=agentId,
+                reviewer=clientAddress,
+                value=decode_feedback_value(value_raw, value_decimals),
+                tags=[tag1, tag2] if tag1 or tag2 else [],
+                text=ff.get("text"),
+                context=ff.get("context"),
+                proofOfPayment=ff.get("proofOfPayment"),
+                fileURI=feedbackUri if feedbackUri else None,
+                endpoint=endpoint_onchain if endpoint_onchain else None,
+                createdAt=int(time.time()),
+                isRevoked=False,
+                capability=ff.get("capability"),
+                name=ff.get("name"),
+                skill=ff.get("skill"),
+                task=ff.get("task"),
+            ),
         )
 
     def getFeedback(
@@ -412,7 +412,7 @@ class FeedbackManager:
 
     def searchFeedback(
         self,
-        agentId: AgentId,
+        agentId: Optional[AgentId] = None,
         clientAddresses: Optional[List[Address]] = None,
         tags: Optional[List[str]] = None,
         capabilities: Optional[List[str]] = None,
@@ -424,25 +424,68 @@ class FeedbackManager:
         include_revoked: bool = False,
         first: int = 100,
         skip: int = 0,
+        agents: Optional[List[AgentId]] = None,
     ) -> List[Feedback]:
-        """Search feedback for an agent - uses subgraph if available."""
+        """Search feedback.
+        
+        Backwards compatible:
+        - `agentId` was previously required; it is now optional.
+        
+        New:
+        - `agents` supports searching across multiple agents.
+        - If neither `agentId` nor `agents` are provided, the query can still run via subgraph
+          using other filters like `clientAddresses` (reviewers), tags, etc.
+        """
         # Use indexer for subgraph queries (unified search interface)
         if self.indexer and self.subgraph_client:
             # Indexer handles subgraph queries for unified search architecture
             # This enables future semantic search capabilities
             return self.indexer.search_feedback(
-                agentId, clientAddresses, tags, capabilities, skills, tasks, names,
-                minValue, maxValue, include_revoked, first, skip
+                agentId,
+                clientAddresses,
+                tags,
+                capabilities,
+                skills,
+                tasks,
+                names,
+                minValue,
+                maxValue,
+                include_revoked,
+                first,
+                skip,
+                agents=agents,
             )
         
         # Fallback: direct subgraph access (if indexer not available)
         if self.subgraph_client:
             return self._search_feedback_subgraph(
-                agentId, clientAddresses, tags, capabilities, skills, tasks, names,
-                minValue, maxValue, include_revoked, first, skip
+                agentId,
+                clientAddresses,
+                tags,
+                capabilities,
+                skills,
+                tasks,
+                names,
+                minValue,
+                maxValue,
+                include_revoked,
+                first,
+                skip,
+                agents=agents,
             )
         
-        # Fallback to blockchain
+        # Fallback to blockchain (requires a specific agent)
+        if not agentId and not agents:
+            raise ValueError(
+                "searchFeedback requires a subgraph when searching without agentId/agents."
+            )
+        if not agentId and agents and len(agents) == 1:
+            agentId = agents[0]
+        if not agentId:
+            raise ValueError(
+                "Blockchain fallback only supports searching a single agent; provide agentId or a single-item agents=[...]."
+            )
+
         # Parse agent ID
         if ":" in agentId:
             tokenId = int(agentId.split(":")[-1])
@@ -505,7 +548,7 @@ class FeedbackManager:
     
     def _search_feedback_subgraph(
         self,
-        agentId: AgentId,
+        agentId: Optional[AgentId],
         clientAddresses: Optional[List[Address]],
         tags: Optional[List[str]],
         capabilities: Optional[List[str]],
@@ -517,11 +560,18 @@ class FeedbackManager:
         include_revoked: bool,
         first: int,
         skip: int,
+        agents: Optional[List[AgentId]] = None,
     ) -> List[Feedback]:
         """Search feedback using subgraph."""
+        merged_agents: Optional[List[AgentId]] = None
+        if agents:
+            merged_agents = list(agents)
+        if agentId:
+            merged_agents = (merged_agents or []) + [agentId]
+
         # Create SearchFeedbackParams
         params = SearchFeedbackParams(
-            agents=[agentId],
+            agents=merged_agents,
             reviewers=clientAddresses,
             tags=tags,
             capabilities=capabilities,
@@ -613,7 +663,7 @@ class FeedbackManager:
         self,
         agentId: AgentId,
         feedbackIndex: int,
-    ) -> Dict[str, Any]:
+    ) -> TransactionHandle[Feedback]:
         """Revoke feedback."""
         # Parse agent ID
         if ":" in agentId:
@@ -630,17 +680,11 @@ class FeedbackManager:
                 tokenId,
                 feedbackIndex
             )
-            
-            receipt = self.web3_client.wait_for_transaction(txHash)
-            
-            return {
-                "txHash": txHash,
-                "agentId": agentId,
-                "clientAddress": clientAddress,
-                "feedbackIndex": feedbackIndex,
-                "status": "revoked"
-            }
-            
+            return TransactionHandle(
+                web3_client=self.web3_client,
+                tx_hash=txHash,
+                compute_result=lambda _receipt: self.getFeedback(agentId, clientAddress, feedbackIndex),
+            )
         except Exception as e:
             raise ValueError(f"Failed to revoke feedback: {e}")
 
@@ -650,7 +694,7 @@ class FeedbackManager:
         clientAddress: Address,
         feedbackIndex: int,
         response: Dict[str, Any],
-    ) -> Feedback:
+    ) -> TransactionHandle[Feedback]:
         """Append a response/follow-up to existing feedback."""
         # Parse agent ID
         if ":" in agentId:
@@ -681,12 +725,11 @@ class FeedbackManager:
                 responseUri,  # Note: contract uses responseURI but variable name kept for compatibility
                 responseHash
             )
-            
-            receipt = self.web3_client.wait_for_transaction(txHash)
-            
-            # Read updated feedback
-            return self.getFeedback(agentId, clientAddress, feedbackIndex)
-            
+            return TransactionHandle(
+                web3_client=self.web3_client,
+                tx_hash=txHash,
+                compute_result=lambda _receipt: self.getFeedback(agentId, clientAddress, feedbackIndex),
+            )
         except Exception as e:
             raise ValueError(f"Failed to append response: {e}")
 

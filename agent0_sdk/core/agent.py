@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+from .transaction_handle import TransactionHandle
+
 
 class Agent:
     """Represents an individual agent with its registration data."""
@@ -78,6 +80,27 @@ class Agent:
     def walletAddress(self) -> Optional[Address]:
         """Get agent wallet address (read-only)."""
         return self.registration_file.walletAddress
+
+    def getWallet(self) -> Optional[Address]:
+        """Read the verified agent wallet from the Identity Registry (on-chain).
+
+        This calls the contract function `getAgentWallet(agentId)` and returns:
+        - the wallet address if set and non-zero
+        - None if unset/cleared (zero address)
+        """
+        if not self.agentId:
+            raise ValueError("Agent must be registered before reading wallet from chain.")
+
+        agent_id_int = int(self.agentId.split(":")[-1]) if ":" in self.agentId else int(self.agentId)
+        wallet = self.sdk.web3_client.call_contract(self.sdk.identity_registry, "getAgentWallet", agent_id_int)
+
+        if not wallet or not isinstance(wallet, str):
+            return None
+
+        if wallet.lower() == "0x0000000000000000000000000000000000000000":
+            return None
+
+        return wallet
 
     @property
     def walletChainId(self) -> Optional[int]:
@@ -499,7 +522,7 @@ class Agent:
         new_wallet_signer: Optional[Union[str, Any]] = None,
         deadline: Optional[int] = None,
         signature: Optional[bytes] = None,
-    ) -> 'Agent':
+    ) -> Optional[TransactionHandle["Agent"]]:
         """Set agent wallet address on-chain (verified agentWallet).
 
         This method is **on-chain only**. The `agentWallet` is a verified attribute.
@@ -554,18 +577,14 @@ class Agent:
 
         # Check if wallet is already set to this address (skip if same)
         try:
-            current_wallet = self.sdk.web3_client.call_contract(
-                self.sdk.identity_registry,
-                "getAgentWallet",
-                agent_id_int
-            )
+            current_wallet = self.getWallet()
             if current_wallet and current_wallet.lower() == addr.lower():
                 logger.debug(f"Agent wallet is already set to {addr}, skipping on-chain update")
                 # Still update local registration file
                 self.registration_file.walletAddress = addr
                 self.registration_file.walletChainId = chainId
                 self.registration_file.updatedAt = int(time.time())
-                return self
+                return None
         except Exception as e:
             logger.debug(f"Could not check current agent wallet: {e}, proceeding with update")
         
@@ -634,23 +653,19 @@ class Agent:
                 deadline,
                 signature
             )
-            
-            # Wait for transaction
-            receipt = self.sdk.web3_client.wait_for_transaction(txHash)
-            logger.debug(f"Agent wallet set on-chain: {txHash}")
-            
         except Exception as e:
             raise ValueError(f"Failed to set agent wallet on-chain: {e}")
-        
-        # Update local registration file
-        self.registration_file.walletAddress = addr
-        self.registration_file.walletChainId = chainId
-        self.registration_file.updatedAt = int(time.time())
-        self._last_registered_wallet = addr
-        
-        return self
 
-    def unsetWallet(self) -> 'Agent':
+        def _apply(_receipt: Dict[str, Any]) -> "Agent":
+            self.registration_file.walletAddress = addr
+            self.registration_file.walletChainId = chainId
+            self.registration_file.updatedAt = int(time.time())
+            self._last_registered_wallet = addr
+            return self
+
+        return TransactionHandle(web3_client=self.sdk.web3_client, tx_hash=txHash, compute_result=_apply)
+
+    def unsetWallet(self) -> Optional[TransactionHandle["Agent"]]:
         """Unset agent wallet address on-chain (verified agentWallet).
 
         This method is **on-chain only** and requires the agent to be registered.
@@ -668,16 +683,12 @@ class Agent:
 
         # Optional short-circuit if already unset (best-effort).
         try:
-            current_wallet = self.sdk.web3_client.call_contract(
-                self.sdk.identity_registry,
-                "getAgentWallet",
-                agent_id_int
-            )
-            if current_wallet in (b"", "0x", "", None):
+            current_wallet = self.getWallet()
+            if current_wallet is None:
                 self.registration_file.walletAddress = None
                 self.registration_file.walletChainId = None
                 self.registration_file.updatedAt = int(time.time())
-                return self
+                return None
         except Exception:
             pass
 
@@ -687,14 +698,16 @@ class Agent:
                 "unsetAgentWallet",
                 agent_id_int
             )
-            _receipt = self.sdk.web3_client.wait_for_transaction(txHash)
         except Exception as e:
             raise ValueError(f"Failed to unset agent wallet on-chain: {e}")
 
-        self.registration_file.walletAddress = None
-        self.registration_file.walletChainId = None
-        self.registration_file.updatedAt = int(time.time())
-        return self
+        def _apply(_receipt: Dict[str, Any]) -> "Agent":
+            self.registration_file.walletAddress = None
+            self.registration_file.walletChainId = None
+            self.registration_file.updatedAt = int(time.time())
+            return self
+
+        return TransactionHandle(web3_client=self.sdk.web3_client, tx_hash=txHash, compute_result=_apply)
 
     def setENS(self, name: str, version: str = "1.0") -> 'Agent':
         """Set ENS name both on-chain and in registration file."""
@@ -761,121 +774,112 @@ class Agent:
         return self.registration_file
 
     # Registration (on-chain)
-    def registerIPFS(self) -> RegistrationFile:
-        """Register agent on-chain with IPFS flow (mint -> pin -> set URI) or update existing registration."""
+    def registerIPFS(self) -> TransactionHandle[RegistrationFile]:
+        """Register agent on-chain with IPFS flow (mint -> pin -> set URI) or update existing registration.
+
+        Submitted-by-default: returns a TransactionHandle immediately after the first tx is submitted.
+        """
         # Validate basic info
         if not self.registration_file.name or not self.registration_file.description:
             raise ValueError("Agent must have name and description before registration")
         
         if self.registration_file.agentId:
-            # Agent already registered - update registration file and redeploy
-            logger.debug("Agent already registered, updating registration file")
-            
-            # Upload updated registration file to IPFS
+            # Agent already registered: upload -> submit setAgentURI; do metadata best-effort after confirmation.
             ipfsCid = self.sdk.ipfs_client.addRegistrationFile(
                 self.registration_file,
                 chainId=self.sdk.chain_id(),
-                identityRegistryAddress=self.sdk.identity_registry.address
+                identityRegistryAddress=self.sdk.identity_registry.address,
             )
-            
-            # Update metadata on-chain if agent is already registered
-            # Only send transactions for dirty (changed) metadata to save gas
-            if self._dirty_metadata:
-                metadata_entries = self._collectMetadataForRegistration()
-                agentId = int(self.agentId.split(":")[-1])
-                for entry in metadata_entries:
-                    # Only send transaction if this metadata key is dirty
-                    if entry["key"] in self._dirty_metadata:
-                        txHash = self.sdk.web3_client.transact_contract(
-                            self.sdk.identity_registry,
-                            "setMetadata",
-                            agentId,
-                            entry["key"],
-                            entry["value"]
-                        )
-                        try:
-                            self.sdk.web3_client.wait_for_transaction(txHash, timeout=30)
-                        except Exception as e:
-                            logger.warning(f"Transaction timeout for {entry['key']}: {e}")
-                        logger.debug(f"Updated metadata on-chain: {entry['key']}")
-            else:
-                logger.debug("No metadata changes detected, skipping metadata updates")
-            
-            # Update agent URI on-chain
-            agentId = int(self.agentId.split(":")[-1])
+
+            agentId_int = int(self.agentId.split(":")[-1])
             txHash = self.sdk.web3_client.transact_contract(
                 self.sdk.identity_registry,
                 "setAgentURI",
-                agentId,
-                f"ipfs://{ipfsCid}"
+                agentId_int,
+                f"ipfs://{ipfsCid}",
             )
-            try:
-                self.sdk.web3_client.wait_for_transaction(txHash, timeout=30)
-                logger.debug(f"Updated agent URI on-chain: {txHash}")
-            except Exception as e:
-                logger.warning(f"URI update timeout (transaction sent: {txHash}): {e}")
-            
-            # Clear dirty flags after successful registration
-            self._last_registered_wallet = self.walletAddress
-            self._last_registered_ens = self.ensEndpoint
-            self._dirty_metadata.clear()
-            
-            return self.registration_file
-        else:
-            # First time registration
-            logger.debug("Registering agent for the first time")
-            
-            # Step 1: Register on-chain without URI
-            self._registerWithoutUri()
-            
-            # Step 2: Prepare registration file with agent ID (already set by _registerWithoutUri)
-            # No need to modify agentId as it's already set correctly
-            
-            # Step 3: Upload to IPFS
+
+            def _apply(_receipt: Dict[str, Any]) -> RegistrationFile:
+                # Best-effort metadata updates (may involve additional txs)
+                if self._dirty_metadata:
+                    metadata_entries = self._collectMetadataForRegistration()
+                    for entry in metadata_entries:
+                        if entry["key"] in self._dirty_metadata:
+                            try:
+                                h = self.sdk.web3_client.transact_contract(
+                                    self.sdk.identity_registry,
+                                    "setMetadata",
+                                    agentId_int,
+                                    entry["key"],
+                                    entry["value"],
+                                )
+                                self.sdk.web3_client.wait_for_transaction(h, timeout=30)
+                            except Exception as e:
+                                logger.warning(f"Metadata update failed or timed out for {entry['key']} (tx sent): {e}")
+
+                self.registration_file.agentURI = f"ipfs://{ipfsCid}"
+                self.registration_file.updatedAt = int(time.time())
+                self._last_registered_wallet = self.walletAddress
+                self._last_registered_ens = self.ensEndpoint
+                self._dirty_metadata.clear()
+                return self.registration_file
+
+            return TransactionHandle(web3_client=self.sdk.web3_client, tx_hash=txHash, compute_result=_apply)
+
+        # First time registration: tx1=register(no URI) -> wait -> upload -> tx2=setAgentURI -> wait
+        metadata_entries = self._collectMetadataForRegistration()
+        txHash = self.sdk.web3_client.transact_contract(
+            self.sdk.identity_registry,
+            "register",
+            "",
+            metadata_entries,
+        )
+
+        def _apply_first(receipt: Dict[str, Any]) -> RegistrationFile:
+            agentId_minted = self._extractAgentIdFromReceipt(receipt)
+            self.registration_file.agentId = f"{self.sdk.chain_id()}:{agentId_minted}"
+            self.registration_file.updatedAt = int(time.time())
+
             ipfsCid = self.sdk.ipfs_client.addRegistrationFile(
                 self.registration_file,
                 chainId=self.sdk.chain_id(),
-                identityRegistryAddress=self.sdk.identity_registry.address
+                identityRegistryAddress=self.sdk.identity_registry.address,
             )
-            
-            # Step 4: Set agent URI on-chain
-            agentId = int(self.agentId.split(":")[-1])
-            txHash = self.sdk.web3_client.transact_contract(
+
+            txHash2 = self.sdk.web3_client.transact_contract(
                 self.sdk.identity_registry,
                 "setAgentURI",
-                agentId,
-                f"ipfs://{ipfsCid}"
+                agentId_minted,
+                f"ipfs://{ipfsCid}",
             )
-            try:
-                self.sdk.web3_client.wait_for_transaction(txHash, timeout=30)
-                logger.debug(f"Set agent URI on-chain: {txHash}")
-            except Exception as e:
-                logger.warning(f"URI set timeout (transaction sent: {txHash}): {e}")
-            
-            # Clear dirty flags after successful registration
+            self.sdk.web3_client.wait_for_transaction(txHash2, timeout=30)
+
+            self.registration_file.agentURI = f"ipfs://{ipfsCid}"
+            self.registration_file.updatedAt = int(time.time())
             self._last_registered_wallet = self.walletAddress
             self._last_registered_ens = self.ensEndpoint
             self._dirty_metadata.clear()
-            
             return self.registration_file
 
-    def register(self, agentUri: str) -> RegistrationFile:
-        """Register agent on-chain with direct URI or update existing registration."""
+        return TransactionHandle(web3_client=self.sdk.web3_client, tx_hash=txHash, compute_result=_apply_first)
+
+    def register(self, agentUri: str) -> TransactionHandle[RegistrationFile]:
+        """Register agent on-chain with direct URI (submitted-by-default)."""
         # Validate basic info
         if not self.registration_file.name or not self.registration_file.description:
             raise ValueError("Agent must have name and description before registration")
         
         if self.registration_file.agentId:
-            # Agent already registered - update agent URI
-            logger.debug("Agent already registered, updating agent URI")
-            self.setAgentUri(agentUri)
-            return self.registration_file
-        else:
-            # First time registration
-            logger.debug("Registering agent for the first time")
-            return self._registerWithUri(agentUri)
+            # Update URI on-chain for existing agent
+            updated = self.updateRegistration(agentURI=agentUri)
+            if isinstance(updated, TransactionHandle):
+                return updated
+            # Should not happen (agentURI was provided), but keep a safe fallback.
+            raise RuntimeError("Expected updateRegistration to return a TransactionHandle when agentURI is provided")
 
-    def _registerWithoutUri(self, idem: Optional[IdemKey] = None) -> RegistrationFile:
+        return self._registerWithUri(agentUri)
+
+    def _registerWithoutUri(self, idem: Optional[IdemKey] = None) -> TransactionHandle[RegistrationFile]:
         """Register without URI (IPFS flow step 1) with metadata."""
         # Collect metadata for registration
         metadata_entries = self._collectMetadataForRegistration()
@@ -888,19 +892,15 @@ class Agent:
             metadata_entries
         )
         
-        # Wait for transaction
-        receipt = self.sdk.web3_client.wait_for_transaction(txHash)
-        
-        # Get agent ID from events
-        agentId = self._extractAgentIdFromReceipt(receipt)
-        
-        # Update registration file
-        self.registration_file.agentId = f"{self.sdk.chain_id()}:{agentId}"
-        self.registration_file.updatedAt = int(time.time())
-        
-        return self.registration_file
+        def _apply(receipt: Dict[str, Any]) -> RegistrationFile:
+            agentId = self._extractAgentIdFromReceipt(receipt)
+            self.registration_file.agentId = f"{self.sdk.chain_id()}:{agentId}"
+            self.registration_file.updatedAt = int(time.time())
+            return self.registration_file
 
-    def _registerWithUri(self, agentURI: URI, idem: Optional[IdemKey] = None) -> RegistrationFile:
+        return TransactionHandle(web3_client=self.sdk.web3_client, tx_hash=txHash, compute_result=_apply)
+
+    def _registerWithUri(self, agentURI: URI, idem: Optional[IdemKey] = None) -> TransactionHandle[RegistrationFile]:
         """Register with direct URI and metadata."""
         # Update registration file
         self.registration_file.agentURI = agentURI
@@ -917,17 +917,13 @@ class Agent:
             metadata_entries
         )
         
-        # Wait for transaction
-        receipt = self.sdk.web3_client.wait_for_transaction(txHash)
-        
-        # Get agent ID from events
-        agentId = self._extractAgentIdFromReceipt(receipt)
-        
-        # Update registration file
-        self.registration_file.agentId = f"{self.sdk.chain_id()}:{agentId}"
-        self.registration_file.updatedAt = int(time.time())
-        
-        return self.registration_file
+        def _apply(receipt: Dict[str, Any]) -> RegistrationFile:
+            agentId = self._extractAgentIdFromReceipt(receipt)
+            self.registration_file.agentId = f"{self.sdk.chain_id()}:{agentId}"
+            self.registration_file.updatedAt = int(time.time())
+            return self.registration_file
+
+        return TransactionHandle(web3_client=self.sdk.web3_client, tx_hash=txHash, compute_result=_apply)
 
     def _extractAgentIdFromReceipt(self, receipt: Dict[str, Any]) -> int:
         """Extract agent ID from transaction receipt."""
@@ -972,7 +968,7 @@ class Agent:
         self,
         agentURI: Optional[URI] = None,
         idem: Optional[IdemKey] = None,
-    ) -> RegistrationFile:
+    ) -> Union[RegistrationFile, TransactionHandle[RegistrationFile]]:
         """Update registration after edits."""
         if not self.registration_file.agentId:
             raise ValueError("Agent must be registered before updating")
@@ -986,15 +982,19 @@ class Agent:
         
         # Update on-chain URI if needed
         if agentURI is not None:
-            agentId = int(self.registration_file.agentId.split(":")[-1])
+            agentId_int = int(self.registration_file.agentId.split(":")[-1])
             txHash = self.sdk.web3_client.transact_contract(
                 self.sdk.identity_registry,
                 "setAgentURI",
-                agentId,
-                agentURI
+                agentId_int,
+                agentURI,
             )
-            self.sdk.web3_client.wait_for_transaction(txHash)
-        
+
+            def _apply(_receipt: Dict[str, Any]) -> RegistrationFile:
+                return self.registration_file
+
+            return TransactionHandle(web3_client=self.sdk.web3_client, tx_hash=txHash, compute_result=_apply)
+
         return self.registration_file
 
     def setAgentUri(self, uri: str) -> 'Agent':
@@ -1014,7 +1014,7 @@ class Agent:
         to: Address,
         approve_operator: bool = False,
         idem: Optional[IdemKey] = None,
-    ) -> Dict[str, Any]:
+    ) -> TransactionHandle[Dict[str, Any]]:
         """Transfer agent ownership.
         
         Note: When an agent is transferred, the agentWallet is automatically reset
@@ -1034,22 +1034,22 @@ class Agent:
             to,
             agentId
         )
-        
-        receipt = self.sdk.web3_client.wait_for_transaction(txHash)
-        
-        # Note: agentWallet will be reset to zero address by the contract
-        # Update local state to reflect this
-        self.registration_file.walletAddress = None
-        self._last_registered_wallet = None
-        
-        return {
-            "txHash": txHash,
-            "agentId": self.registration_file.agentId,
-            "from": self.sdk.web3_client.account.address,
-            "to": to
-        }
 
-    def addOperator(self, operator: Address, idem: Optional[IdemKey] = None) -> Dict[str, Any]:
+        def _apply(_receipt: Dict[str, Any]) -> Dict[str, Any]:
+            # Note: agentWallet will be reset to zero address by the contract
+            self.registration_file.walletAddress = None
+            self._last_registered_wallet = None
+            self.registration_file.updatedAt = int(time.time())
+            return {
+                "txHash": txHash,
+                "agentId": self.registration_file.agentId,
+                "from": self.sdk.web3_client.account.address,
+                "to": to,
+            }
+
+        return TransactionHandle(web3_client=self.sdk.web3_client, tx_hash=txHash, compute_result=_apply)
+
+    def addOperator(self, operator: Address, idem: Optional[IdemKey] = None) -> TransactionHandle[Dict[str, Any]]:
         """Add operator (setApprovalForAll)."""
         if not self.registration_file.agentId:
             raise ValueError("Agent must be registered before adding operators")
@@ -1060,12 +1060,14 @@ class Agent:
             operator,
             True
         )
-        
-        receipt = self.sdk.web3_client.wait_for_transaction(txHash)
-        
-        return {"txHash": txHash, "operator": operator}
 
-    def removeOperator(self, operator: Address, idem: Optional[IdemKey] = None) -> Dict[str, Any]:
+        return TransactionHandle(
+            web3_client=self.sdk.web3_client,
+            tx_hash=txHash,
+            compute_result=lambda _receipt: {"txHash": txHash, "operator": operator},
+        )
+
+    def removeOperator(self, operator: Address, idem: Optional[IdemKey] = None) -> TransactionHandle[Dict[str, Any]]:
         """Remove operator."""
         if not self.registration_file.agentId:
             raise ValueError("Agent must be registered before removing operators")
@@ -1076,12 +1078,14 @@ class Agent:
             operator,
             False
         )
-        
-        receipt = self.sdk.web3_client.wait_for_transaction(txHash)
-        
-        return {"txHash": txHash, "operator": operator}
 
-    def transfer(self, newOwnerAddress: str) -> Dict[str, Any]:
+        return TransactionHandle(
+            web3_client=self.sdk.web3_client,
+            tx_hash=txHash,
+            compute_result=lambda _receipt: {"txHash": txHash, "operator": operator},
+        )
+
+    def transfer(self, newOwnerAddress: str) -> TransactionHandle[Dict[str, Any]]:
         """Transfer agent ownership to a new address.
         
         Only the current owner can transfer the agent.
@@ -1142,17 +1146,20 @@ class Agent:
             checksum_address,
             token_id
         )
-        
-        receipt = self.sdk.web3_client.wait_for_transaction(txHash)
-        
-        logger.debug(f"Agent {self.registration_file.agentId} successfully transferred to {checksum_address}")
-        
-        # Note: agentWallet will be reset to zero address by the contract
-        # Update local state to reflect this
-        self.registration_file.walletAddress = None
-        self._last_registered_wallet = None
-        
-        return {"txHash": txHash, "from": currentOwner, "to": checksum_address, "agentId": self.registration_file.agentId}
+
+        def _apply(_receipt: Dict[str, Any]) -> Dict[str, Any]:
+            logger.debug(f"Agent {self.registration_file.agentId} successfully transferred to {checksum_address}")
+            self.registration_file.walletAddress = None
+            self._last_registered_wallet = None
+            self.registration_file.updatedAt = int(time.time())
+            return {
+                "txHash": txHash,
+                "from": currentOwner,
+                "to": checksum_address,
+                "agentId": self.registration_file.agentId,
+            }
+
+        return TransactionHandle(web3_client=self.sdk.web3_client, tx_hash=txHash, compute_result=_apply)
 
     def activate(self, idem: Optional[IdemKey] = None) -> RegistrationFile:
         """Activate agent (soft "undelete")."""

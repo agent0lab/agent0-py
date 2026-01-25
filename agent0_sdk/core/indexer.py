@@ -433,7 +433,7 @@ class AgentIndexer:
                 mcpPrompts=reg_file.get('mcpPrompts', []),
                 mcpResources=reg_file.get('mcpResources', []),
                 active=reg_file.get('active', True),
-                x402support=reg_file.get('x402support', False),
+                x402support=reg_file.get('x402Support', reg_file.get('x402support', False)),
                 extras={}
             )
             
@@ -724,7 +724,7 @@ class AgentIndexer:
                 "mcpPrompts": reg_file.get('mcpPrompts', []),
                 "mcpResources": reg_file.get('mcpResources', []),
                 "active": reg_file.get('active', True),
-                "x402support": reg_file.get('x402support', False),
+                "x402support": reg_file.get('x402Support', reg_file.get('x402support', False)),
                 "totalFeedback": agent_data.get('totalFeedback', 0),
                 "lastActivity": agent_data.get('lastActivity'),
                 "updatedAt": agent_data.get('updatedAt'),
@@ -871,7 +871,7 @@ class AgentIndexer:
                     "mcpPrompts": reg_file.get('mcpPrompts', []),
                     "mcpResources": reg_file.get('mcpResources', []),
                     "active": reg_file.get('active', True),
-                    "x402support": reg_file.get('x402support', False),
+                    "x402support": reg_file.get('x402Support', reg_file.get('x402support', False)),
                     "totalFeedback": agent.get('totalFeedback', 0),
                     "lastActivity": agent.get('lastActivity'),
                     "updatedAt": agent.get('updatedAt'),
@@ -1106,7 +1106,7 @@ class AgentIndexer:
     
     def search_feedback(
         self,
-        agentId: AgentId,
+        agentId: Optional[AgentId] = None,
         clientAddresses: Optional[List[Address]] = None,
         tags: Optional[List[str]] = None,
         capabilities: Optional[List[str]] = None,
@@ -1118,29 +1118,77 @@ class AgentIndexer:
         include_revoked: bool = False,
         first: int = 100,
         skip: int = 0,
+        agents: Optional[List[AgentId]] = None,
     ) -> List[Feedback]:
-        """Search feedback for an agent - uses subgraph if available."""
-        # Parse chainId from agentId
-        chain_id, token_id = self._parse_agent_id(agentId)
+        """Search feedback via subgraph.
+        
+        Backwards compatible:
+        - Previously required `agentId`; it is now optional.
+        
+        New:
+        - `agents` supports searching across multiple agents.
+        - If neither `agentId` nor `agents` is provided, subgraph search can still run using
+          other filters (e.g., reviewers / tags).
+        """
+
+        merged_agents: Optional[List[AgentId]] = None
+        if agents:
+            merged_agents = list(agents)
+        if agentId:
+            merged_agents = (merged_agents or []) + [agentId]
+
+        # Determine chain/subgraph client based on first specified agent (if any)
+        chain_id = None
+        if merged_agents and len(merged_agents) > 0:
+            first_agent = merged_agents[0]
+            chain_id, token_id = self._parse_agent_id(first_agent)
         
         # Get subgraph client for the chain
         subgraph_client = None
-        full_agent_id = agentId
-        
+
         if chain_id is not None:
             subgraph_client = self._get_subgraph_client_for_chain(chain_id)
         else:
-            # No chainId in agentId, use SDK's default
-            # Construct full agentId format for subgraph query
-            default_chain_id = self.web3_client.chain_id
-            full_agent_id = f"{default_chain_id}:{token_id}"
+            # If no explicit chainId, use SDK's default subgraph client (if configured).
             subgraph_client = self.subgraph_client
+
+        # If we have agent ids but they weren't chain-prefixed, prefix them with default chain id for the subgraph.
+        if merged_agents and chain_id is None:
+            default_chain_id = self.web3_client.chain_id
+            normalized: List[AgentId] = []
+            for aid in merged_agents:
+                if isinstance(aid, str) and ":" in aid:
+                    normalized.append(aid)
+                else:
+                    normalized.append(f"{default_chain_id}:{int(aid)}")
+            merged_agents = normalized
+        elif merged_agents and chain_id is not None:
+            # Ensure all agent ids are chain-prefixed for the chosen chain
+            normalized = []
+            for aid in merged_agents:
+                if isinstance(aid, str) and ":" in aid:
+                    normalized.append(aid)
+                else:
+                    normalized.append(f"{chain_id}:{int(aid)}")
+            merged_agents = normalized
         
         # Use subgraph if available (preferred)
         if subgraph_client:
             return self._search_feedback_subgraph(
-                full_agent_id, clientAddresses, tags, capabilities, skills, tasks, names,
-                minValue, maxValue, include_revoked, first, skip, subgraph_client
+                agentId=None,
+                agents=merged_agents,
+                clientAddresses=clientAddresses,
+                tags=tags,
+                capabilities=capabilities,
+                skills=skills,
+                tasks=tasks,
+                names=names,
+                minValue=minValue,
+                maxValue=maxValue,
+                include_revoked=include_revoked,
+                first=first,
+                skip=skip,
+                subgraph_client=subgraph_client,
             )
         
         # Fallback not implemented (would require blockchain queries)
@@ -1149,7 +1197,8 @@ class AgentIndexer:
     
     def _search_feedback_subgraph(
         self,
-        agentId: AgentId,
+        agentId: Optional[AgentId],
+        agents: Optional[List[AgentId]],
         clientAddresses: Optional[List[Address]],
         tags: Optional[List[str]],
         capabilities: Optional[List[str]],
@@ -1169,9 +1218,15 @@ class AgentIndexer:
         if not client:
             return []
         
+        merged_agents: Optional[List[AgentId]] = None
+        if agents:
+            merged_agents = list(agents)
+        if agentId:
+            merged_agents = (merged_agents or []) + [agentId]
+
         # Create SearchFeedbackParams
         params = SearchFeedbackParams(
-            agents=[agentId],
+            agents=merged_agents,
             reviewers=clientAddresses,
             tags=tags,
             capabilities=capabilities,
@@ -1305,7 +1360,7 @@ class AgentIndexer:
                 token_id
             )
             
-            # Get agentWallet using new dedicated function
+            # Get on-chain verified wallet (IdentityRegistry.getAgentWallet)
             wallet_address = None
             try:
                 wallet_address = self.web3_client.call_contract(
@@ -1316,7 +1371,6 @@ class AgentIndexer:
                 if wallet_address == "0x0000000000000000000000000000000000000000":
                     wallet_address = None
             except Exception:
-                # Fallback to registration file if getAgentWallet not available
                 pass
             
             # Create agent ID

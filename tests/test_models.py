@@ -92,9 +92,9 @@ class TestRegistrationFile:
         assert data["image"] == "https://example.com/image.png"
         assert data["type"] == "https://eips.ethereum.org/EIPS/eip-8004#registration-v1"
         assert data["x402Support"] is False  # Updated to camelCase per ERC-8004 spec
-        assert len(data["endpoints"]) == 1
-        assert data["endpoints"][0]["name"] == "MCP"
-        assert data["endpoints"][0]["endpoint"] == "https://mcp.example.com/"
+        assert len(data["services"]) == 1
+        assert data["services"][0]["name"] == "MCP"
+        assert data["services"][0]["endpoint"] == "https://mcp.example.com/"
         assert data["supportedTrust"] == ["reputation"]
     
     def test_registration_file_from_dict(self):
@@ -103,7 +103,7 @@ class TestRegistrationFile:
             "name": "Test Agent",
             "description": "A test agent",
             "image": "https://example.com/image.png",
-            "endpoints": [
+            "services": [
                 {
                     "name": "MCP",
                     "endpoint": "https://mcp.example.com/",

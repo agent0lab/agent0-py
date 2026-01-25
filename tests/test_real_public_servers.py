@@ -6,6 +6,7 @@ Tests against actual public servers provided by the user.
 import logging
 import sys
 import os
+import pytest
 
 # Configure logging: root logger at WARNING to suppress noisy dependencies
 logging.basicConfig(
@@ -23,6 +24,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from agent0_sdk.core.endpoint_crawler import EndpointCrawler
 import json
+
+RUN_LIVE_TESTS = os.getenv("RUN_LIVE_TESTS", "0") != "0"
 
 def main():
     print("🧪 Testing Endpoint Crawler with Real Public Servers")
@@ -99,5 +102,12 @@ def main():
     print("=" * 70)
 
 if __name__ == "__main__":
+    main()
+
+
+@pytest.mark.integration
+def test_real_public_servers_live():
+    if not RUN_LIVE_TESTS:
+        pytest.skip("Set RUN_LIVE_TESTS=1 to enable live integration tests")
     main()
 

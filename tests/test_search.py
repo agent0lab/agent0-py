@@ -28,6 +28,8 @@ import logging
 import time
 import random
 import sys
+import os
+import pytest
 
 # Configure logging: root logger at WARNING to suppress noisy dependencies
 logging.basicConfig(
@@ -44,6 +46,7 @@ logging.getLogger('agent0_sdk.core').setLevel(logging.DEBUG)
 from agent0_sdk import SDK, SearchParams
 from tests.config import CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, SUBGRAPH_URL, AGENT_ID, print_config
 
+RUN_LIVE_TESTS = os.getenv("RUN_LIVE_TESTS", "0") != "0"
 
 def main():
     print("🔍 Testing Agent Search and Discovery")
@@ -412,4 +415,16 @@ def main():
 
 
 if __name__ == "__main__":
+    main()
+
+
+@pytest.mark.integration
+def test_search_live():
+    if not RUN_LIVE_TESTS:
+        pytest.skip("Set RUN_LIVE_TESTS=1 to enable live integration tests")
+    if not RPC_URL or not RPC_URL.strip():
+        pytest.skip("RPC_URL not set")
+    if not SUBGRAPH_URL or not SUBGRAPH_URL.strip():
+        pytest.skip("SUBGRAPH_URL not set")
+
     main()

@@ -12,6 +12,8 @@ Flow:
 
 import logging
 import sys
+import os
+import pytest
 
 # Configure logging: root logger at WARNING to suppress noisy dependencies
 logging.basicConfig(
@@ -28,6 +30,7 @@ logging.getLogger('agent0_sdk.core').setLevel(logging.DEBUG)
 from agent0_sdk import SDK, SearchParams
 from tests.config import CHAIN_ID, RPC_URL, print_config
 
+RUN_LIVE_TESTS = os.getenv("RUN_LIVE_TESTS", "0") != "0"
 # Supported chains for multi-chain testing
 SUPPORTED_CHAINS = [11155111, 84532, 80002]  # ETH Sepolia, Base Sepolia, Polygon Amoy
 
@@ -585,4 +588,14 @@ def main():
 
 
 if __name__ == "__main__":
+    main()
+
+
+@pytest.mark.integration
+def test_multi_chain_live():
+    if not RUN_LIVE_TESTS:
+        pytest.skip("Set RUN_LIVE_TESTS=1 to enable live integration tests")
+    if not RPC_URL or not RPC_URL.strip():
+        pytest.skip("RPC_URL not set")
+
     main()

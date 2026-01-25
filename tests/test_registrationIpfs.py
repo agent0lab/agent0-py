@@ -7,6 +7,8 @@ import logging
 import time
 import random
 import sys
+import os
+import pytest
 
 # Configure logging: root logger at WARNING to suppress noisy dependencies
 logging.basicConfig(
@@ -23,6 +25,8 @@ logging.getLogger('agent0_sdk.core').setLevel(logging.DEBUG)
 from agent0_sdk import SDK
 from tests.config import CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, CLIENT_PRIVATE_KEY, PINATA_JWT, print_config
 from eth_account import Account
+
+RUN_LIVE_TESTS = os.getenv("RUN_LIVE_TESTS", "0") != "0"
 
 
 def generateRandomData():
@@ -91,8 +95,9 @@ def main():
     
     print(f"\n✅ Created: {testData['name']}")
     
-    agent.registerIPFS()
-    agentId = agent.agentId
+    reg_tx = agent.registerIPFS()
+    reg_file = reg_tx.wait_confirmed(timeout=180).result
+    agentId = reg_file.agentId
     print(f"✅ Registered: ID={agentId}")
     
     capturedState = {
@@ -126,17 +131,16 @@ def main():
     )
     # Note: After registration, setWallet() requires EIP-712 signature from the NEW wallet.
     # For testing, set the wallet to a second address derived from CLIENT_PRIVATE_KEY and let SDK sign.
-    if not CLIENT_PRIVATE_KEY:
-        raise ValueError("CLIENT_PRIVATE_KEY must be set in .env file for this test")
-
     second_wallet_account = Account.from_key(CLIENT_PRIVATE_KEY)
     second_wallet_address = second_wallet_account.address
     print(f"✅ Using second wallet address (from CLIENT_PRIVATE_KEY): {second_wallet_address}")
-    agent.setWallet(
+    wallet_tx = agent.setWallet(
         second_wallet_address,
         random.choice([1, 11155111, 8453, 137, 42161]),
         new_wallet_signer=CLIENT_PRIVATE_KEY,
     )
+    if wallet_tx is not None:
+        wallet_tx.wait_confirmed(timeout=180)
     agent.setENS(f"{testData['ensName']}.updated", "v1")
     # Update OASF skills/domains as well (validated)
     agent.addSkill("advanced_reasoning_planning/strategic_planning", validate_oasf=True)
@@ -156,7 +160,8 @@ def main():
         "numericField": random.randint(1000, 9999)
     })
     
-    agent.registerIPFS()
+    update_tx = agent.registerIPFS()
+    update_tx.wait_confirmed(timeout=180)
     print(f"✅ Updated & re-registered")
     
     # Capture updated state before deletion
@@ -252,5 +257,21 @@ if __name__ == "__main__":
         print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
-        exit(1)
+        raise
+
+
+@pytest.mark.integration
+def test_registration_ipfs_live():
+    if not RUN_LIVE_TESTS:
+        pytest.skip("Set RUN_LIVE_TESTS=1 to enable live integration tests")
+    if not RPC_URL or not RPC_URL.strip():
+        pytest.skip("RPC_URL not set")
+    if not AGENT_PRIVATE_KEY or not AGENT_PRIVATE_KEY.strip():
+        pytest.skip("AGENT_PRIVATE_KEY not set")
+    if not CLIENT_PRIVATE_KEY or not CLIENT_PRIVATE_KEY.strip():
+        pytest.skip("CLIENT_PRIVATE_KEY not set")
+    if not PINATA_JWT or not PINATA_JWT.strip():
+        pytest.skip("PINATA_JWT not set")
+
+    main()
 

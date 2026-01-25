@@ -27,6 +27,7 @@ from .agent import Agent
 from .indexer import AgentIndexer
 from .ipfs_client import IPFSClient
 from .feedback_manager import FeedbackManager
+from .transaction_handle import TransactionHandle
 from .subgraph_client import SubgraphClient
 
 
@@ -273,6 +274,8 @@ class SDK:
             name=name,
             description=description,
             image=image,
+            # Default trust model: reputation (if caller doesn't set one explicitly).
+            trustModels=[TrustModel.REPUTATION],
             updatedAt=int(time.time())
         )
         return Agent(sdk=self, registration_file=registration_file)
@@ -590,7 +593,7 @@ class SDK:
                     mcpPrompts=reg_file.get('mcpPrompts', []),
                     mcpResources=reg_file.get('mcpResources', []),
                     active=reg_file.get('active', True),
-                    x402support=reg_file.get('x402support', False),
+                    x402support=reg_file.get('x402Support', reg_file.get('x402support', False)),
                     extras={'averageValue': agent_data.get('averageValue')}
                 )
                 results.append(agent_summary)
@@ -747,7 +750,7 @@ class SDK:
                 mcpPrompts=reg_file.get('mcpPrompts', []),
                 mcpResources=reg_file.get('mcpResources', []),
                 active=reg_file.get('active', True),
-                x402support=reg_file.get('x402support', False),
+                x402support=reg_file.get('x402Support', reg_file.get('x402support', False)),
                 extras={'averageValue': agent_data.get('averageValue')}
             )
             results.append(agent_summary)
@@ -797,7 +800,7 @@ class SDK:
         tag2: Optional[str] = None,
         endpoint: Optional[str] = None,
         feedbackFile: Optional[Dict[str, Any]] = None,
-    ) -> "Feedback":
+    ) -> "TransactionHandle[Feedback]":
         """Give feedback (on-chain first; optional off-chain file upload).
         
         - If feedbackFile is None: submit on-chain only (no upload even if IPFS is configured).
@@ -825,7 +828,7 @@ class SDK:
 
     def searchFeedback(
         self,
-        agentId: "AgentId",
+        agentId: Optional["AgentId"] = None,
         reviewers: Optional[List["Address"]] = None,
         tags: Optional[List[str]] = None,
         capabilities: Optional[List[str]] = None,
@@ -837,10 +840,38 @@ class SDK:
         include_revoked: bool = False,
         first: int = 100,
         skip: int = 0,
+        agents: Optional[List["AgentId"]] = None,
     ) -> List["Feedback"]:
-        """Search feedback for an agent."""
+        """Search feedback.
+        
+        Backwards compatible:
+        - Previously required `agentId`; it is now optional.
+        
+        New:
+        - `agents` can be used to search feedback across multiple agents in one call.
+        - `reviewers` can now be used without specifying any agent, enabling "all feedback given by a wallet".
+        """
+        has_any_filter = any([
+            bool(agentId),
+            bool(agents),
+            bool(reviewers),
+            bool(tags),
+            bool(capabilities),
+            bool(skills),
+            bool(tasks),
+            bool(names),
+            minValue is not None,
+            maxValue is not None,
+        ])
+        if not has_any_filter:
+            raise ValueError(
+                "searchFeedback requires at least one filter "
+                "(agentId/agents/reviewers/tags/capabilities/skills/tasks/names/minValue/maxValue)."
+            )
+
         return self.feedback_manager.searchFeedback(
             agentId=agentId,
+            agents=agents,
             clientAddresses=reviewers,
             tags=tags,
             capabilities=capabilities,
@@ -857,13 +888,10 @@ class SDK:
     def revokeFeedback(
         self,
         agentId: "AgentId",
-        clientAddress: "Address",
         feedbackIndex: int,
-    ) -> "Feedback":
-        """Revoke feedback."""
-        return self.feedback_manager.revokeFeedback(
-            agentId, clientAddress, feedbackIndex
-        )
+    ) -> "TransactionHandle[Feedback]":
+        """Revoke feedback (submitted-by-default)."""
+        return self.feedback_manager.revokeFeedback(agentId, feedbackIndex)
     
     def appendResponse(
         self,
@@ -871,8 +899,8 @@ class SDK:
         clientAddress: "Address",
         feedbackIndex: int,
         response: Dict[str, Any],
-    ) -> "Feedback":
-        """Append a response/follow-up to existing feedback."""
+    ) -> "TransactionHandle[Feedback]":
+        """Append a response/follow-up to existing feedback (submitted-by-default)."""
         return self.feedback_manager.appendResponse(
             agentId, clientAddress, feedbackIndex, response
         )
@@ -890,7 +918,7 @@ class SDK:
         self,
         agentId: "AgentId",
         newOwnerAddress: str,
-    ) -> Dict[str, Any]:
+    ) -> "TransactionHandle[Dict[str, Any]]":
         """Transfer agent ownership to a new address.
         
         Convenience method that loads the agent and calls transfer().

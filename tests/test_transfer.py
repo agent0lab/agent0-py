@@ -13,6 +13,8 @@ This script demonstrates:
 import logging
 import time
 import sys
+import os
+import pytest
 
 # Configure logging: root logger at WARNING to suppress noisy dependencies
 logging.basicConfig(
@@ -31,6 +33,8 @@ from tests.config import (
     print_config
 )
 from agent0_sdk import SDK, EndpointType, TrustModel
+
+RUN_LIVE_TESTS = os.getenv("RUN_LIVE_TESTS", "0") != "0"
 
 def main():
     print("=" * 60)
@@ -93,7 +97,8 @@ def main():
     
     # Register agent on-chain
     print("\n📝 Registering agent on-chain...")
-    registration_result = agent.registerIPFS()
+    reg_tx = agent.registerIPFS()
+    registration_result = reg_tx.wait_confirmed(timeout=180).result
     
     print(f"✅ Agent registered successfully!")
     print(f"   Agent ID: {registration_result.agentId}")
@@ -108,7 +113,9 @@ def main():
     # Set wallet on-chain after registration (requires EIP-712 signature).
     # Since ownerA_address matches current SDK signer, it can auto-sign.
     print("\n🔍 Setting agent wallet on-chain...")
-    agent.setWallet(ownerA_address, CHAIN_ID)
+    wallet_tx = agent.setWallet(ownerA_address, CHAIN_ID)
+    if wallet_tx is not None:
+        wallet_tx.wait_confirmed(timeout=180)
     print(f"✅ Agent wallet set on-chain: {ownerA_address}")
     
     # Verify wallet is set on-chain
@@ -129,7 +136,8 @@ def main():
     print(f"🔄 Transferring agent {registration_result.agentId} to {ownerB_address}...")
     
     try:
-        transfer_result = agent.transfer(ownerB_address)
+        transfer_tx = agent.transfer(ownerB_address)
+        transfer_result = transfer_tx.wait_confirmed(timeout=180).result
         print(f"✅ Transfer successful!")
         print(f"   Transaction: {transfer_result['txHash']}")
         print(f"   From: {transfer_result['from']}")
@@ -193,11 +201,12 @@ def main():
     
     try:
         # Try to transfer back to Owner A (should fail)
-        sdk_transfer_result = agentSdk.transferAgent(
+        sdk_transfer_tx = agentSdk.transferAgent(
             registration_result.agentId,
             ownerA_address
         )
-        print(f"❌ Unexpected success: {sdk_transfer_result}")
+        sdk_transfer_tx.wait_confirmed(timeout=180)
+        print(f"❌ Unexpected success: {sdk_transfer_tx.tx_hash}")
     except Exception as e:
         print(f"✅ Expected failure: {e}")
     
@@ -280,4 +289,18 @@ def main():
         print(f"   Transfer Transaction: {transfer_result['txHash']}")
 
 if __name__ == "__main__":
+    main()
+
+
+@pytest.mark.integration
+def test_transfer_live():
+    if not RUN_LIVE_TESTS:
+        pytest.skip("Set RUN_LIVE_TESTS=1 to enable live integration tests")
+    if not RPC_URL or not RPC_URL.strip():
+        pytest.skip("RPC_URL not set")
+    if not AGENT_PRIVATE_KEY or not AGENT_PRIVATE_KEY.strip():
+        pytest.skip("AGENT_PRIVATE_KEY not set")
+    if not PINATA_JWT or not PINATA_JWT.strip():
+        pytest.skip("PINATA_JWT not set")
+
     main()

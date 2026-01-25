@@ -360,7 +360,7 @@ class TestOASFManagement:
             
             # Find OASF endpoint in serialized data
             oasf_endpoint_dict = next(
-                ep for ep in reg_file_dict["endpoints"] 
+                ep for ep in reg_file_dict["services"]
                 if ep["name"] == "OASF"
             )
             

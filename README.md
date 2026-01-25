@@ -88,20 +88,23 @@ agent.setTrust(reputation=True, cryptoEconomic=True)
 agent.setMetadata({"version": "1.0.0", "category": "ai-assistant"})
 agent.setActive(True)
 
-# Register on-chain with IPFS
-agent.registerIPFS()
-print(f"Agent registered: {agent.agentId}")  # e.g., "11155111:123"
-print(f"Agent URI: {agent.agentURI}")  # e.g., "ipfs://Qm..."
+# Register on-chain with IPFS (submitted-by-default)
+reg_tx = agent.registerIPFS()
+reg = reg_tx.wait_confirmed(timeout=180).result
+print(f"Agent registered: {reg.agentId}")  # e.g., "11155111:123"
+print(f"Agent URI: {reg.agentURI}")  # e.g., "ipfs://Qm..."
 
 # (Optional) Change the agent wallet after registration
 # - On mint/registration, `agentWallet` defaults to the current owner address.
 # - Call this only if you want a DIFFERENT wallet (or after a transfer, since the wallet resets to zero).
 # - Transaction is sent by the SDK signer (agent owner), but the signature must be produced by the NEW wallet.
-agent.setWallet(
+wallet_tx = agent.setWallet(
     "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
     chainId=11155111,
     new_wallet_signer=os.getenv("NEW_WALLET_PRIVATE_KEY"),
 )
+if wallet_tx:
+    wallet_tx.wait_confirmed(timeout=180)
 ```
 
 ### 3. Load and Edit Agent
@@ -115,8 +118,9 @@ agent.updateInfo(description="Updated description with new capabilities")
 agent.setMCP("https://new-mcp.example.com/")
 
 # Re-register to update on-chain
-agent.registerIPFS()
-print(f"Updated: {agent.agentURI}")
+update_tx = agent.registerIPFS()
+update = update_tx.wait_confirmed(timeout=180).result
+print(f"Updated: {update.agentURI}")
 ```
 
 ### 4. Search Agents
@@ -144,13 +148,14 @@ agent_summary = sdk.getAgent("11155111:123")
 
 ```python
 # On-chain-only feedback (no off-chain upload, even if IPFS is configured)
-feedback = sdk.giveFeedback(
+tx = sdk.giveFeedback(
     agentId="11155111:123",
     value=85,  # number|string
     tag1="data_analyst",  # Optional: tags are strings
     tag2="finance",
     endpoint="https://example.com/endpoint",  # Optional: saved on-chain
 )
+feedback = tx.wait_confirmed(timeout=180).result
 
 # Rich feedback (optional off-chain file + on-chain fields)
 feedback_file = sdk.prepareFeedbackFile({
@@ -160,7 +165,7 @@ feedback_file = sdk.prepareFeedbackFile({
     "text": "Great agent!",      # Optional
 })
 
-feedback = sdk.giveFeedback(
+tx = sdk.giveFeedback(
     agentId="11155111:123",
     value=85,
     tag1="data_analyst",
@@ -168,6 +173,7 @@ feedback = sdk.giveFeedback(
     endpoint="https://example.com/endpoint",
     feedbackFile=feedback_file,  # If provided, requires IPFS configured
 )
+feedback = tx.wait_confirmed(timeout=180).result
 
 # Search feedback
 results = sdk.searchFeedback(
@@ -175,6 +181,16 @@ results = sdk.searchFeedback(
     capabilities=["tools"],
     minValue=80,
     maxValue=100
+)
+
+# NEW: Search feedback given by a reviewer wallet (across all agents; subgraph required)
+given = sdk.searchFeedback(
+    reviewers=["0x742d35cc6634c0532925a3b844bc9e7595f0beb7"]
+)
+
+# NEW: Search feedback across multiple agents at once
+multi = sdk.searchFeedback(
+    agents=["11155111:123", "11155111:456", "11155111:789"]
 )
 
 # Get reputation summary

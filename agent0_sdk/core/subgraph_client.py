@@ -53,6 +53,12 @@ class SubgraphClient:
             if ("has no field" in msg and "responseURI" in msg) and ("responseURI" in query):
                 logger.debug("Subgraph schema missing responseURI; retrying query with responseUri")
                 return _do_query(query.replace("responseURI", "responseUri"))
+            # Some deployments still expose `x402support` instead of `x402Support`.
+            if (("has no field" in msg and "x402Support" in msg) or ("Cannot query field" in msg and "x402Support" in msg)) and (
+                "x402Support" in query
+            ):
+                logger.debug("Subgraph schema missing x402Support; retrying query with x402support")
+                return _do_query(query.replace("x402Support", "x402support"))
             # Some deployments don't expose agentWallet fields on AgentRegistrationFile.
             if (
                 "Type `AgentRegistrationFile` has no field `agentWallet`" in msg
@@ -115,7 +121,7 @@ class SubgraphClient:
                 description
                 image
                 active
-                x402support
+                x402Support
                 supportedTrusts
                 mcpEndpoint
                 mcpVersion
@@ -183,7 +189,7 @@ class SubgraphClient:
                 description
                 image
                 active
-                x402support
+                x402Support
                 supportedTrusts
                 mcpEndpoint
                 mcpVersion
@@ -772,7 +778,7 @@ class SubgraphClient:
                     description
                     image
                     active
-                    x402support
+                    x402Support
                     supportedTrusts
                     mcpEndpoint
                     mcpVersion

@@ -106,7 +106,7 @@ class RegistrationFile:
             "name": self.name,
             "description": self.description,
             "image": self.image,
-            "endpoints": endpoints,
+            "services": endpoints,
             "registrations": registrations,
             "supportedTrust": [tm.value if isinstance(tm, TrustModel) else tm for tm in self.trustModels],
             "active": self.active,
@@ -118,7 +118,8 @@ class RegistrationFile:
     def from_dict(cls, data: Dict[str, Any]) -> RegistrationFile:
         """Create from dictionary."""
         endpoints = []
-        for ep_data in data.get("endpoints", []):
+        raw_services = data.get("services", data.get("endpoints", []))
+        for ep_data in raw_services:
             name = ep_data["name"]
             # Special handling for agentWallet - it's not a standard endpoint type
             if name == "agentWallet":
