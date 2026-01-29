@@ -82,3 +82,4 @@ Because `agentId` is now optional, `sdk.searchFeedback()` with no filters would 
 
 The TypeScript SDK sets a fixed gas limit of **300,000** for `giveFeedback` transactions to bypass unreliable `eth_estimateGas` behavior (notably for calls with multiple dynamic `string` parameters) and avoid failures before the wallet confirmation prompt.
 
+
