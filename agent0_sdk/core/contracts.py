@@ -545,7 +545,7 @@ DEFAULT_REGISTRIES: Dict[int, Dict[str, str]] = {
 # Default subgraph URLs for different chains
 # Note: Subgraph URLs may need to be updated when new contracts are deployed
 DEFAULT_SUBGRAPH_URLS: Dict[int, str] = {
-    1: "https://gateway.thegraph.com/api/7fd2e7d89ce3ef24cd0d4590298f0b2c/subgraphs/id/FX78UzofJFr5h2Udznv7pZ2uLG1JBbYsPm7eecRSYnty",  # Ethereum Mainnet
+    1: "https://gateway.thegraph.com/api/7fd2e7d89ce3ef24cd0d4590298f0b2c/subgraphs/id/FV6RR6y13rsnCxBAicKuQEwDp8ioEGiNaWaZUmvr1F8k",  # Ethereum Mainnet
     11155111: "https://gateway.thegraph.com/api/00a452ad3cd1900273ea62c1bf283f93/subgraphs/id/6wQRC7geo9XYAhckfmfo8kbMRLeWU8KQd3XsJqFKmZLT",  # Ethereum Sepolia
     # Other chains temporarily disabled - subgraphs to be updated
     # 84532: "https://gateway.thegraph.com/api/...",  # Base Sepolia - To be updated

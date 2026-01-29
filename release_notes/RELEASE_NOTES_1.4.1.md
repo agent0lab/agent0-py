@@ -7,7 +7,7 @@ This release adds **Ethereum Mainnet** (chainId **1**) support.
 - **Ethereum Mainnet defaults**
   - Added Mainnet registry defaults (Identity + Reputation).
   - Added Mainnet subgraph default:
-    - `https://gateway.thegraph.com/api/7fd2e7d89ce3ef24cd0d4590298f0b2c/subgraphs/id/FX78UzofJFr5h2Udznv7pZ2uLG1JBbYsPm7eecRSYnty`
+    - `https://gateway.thegraph.com/api/7fd2e7d89ce3ef24cd0d4590298f0b2c/subgraphs/id/FV6RR6y13rsnCxBAicKuQEwDp8ioEGiNaWaZUmvr1F8k`
 
 ## Notes
 
