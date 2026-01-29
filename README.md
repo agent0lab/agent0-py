@@ -52,7 +52,7 @@ import os
 
 # Initialize SDK with IPFS and subgraph
 sdk = SDK(
-    chainId=11155111,  # Ethereum Sepolia testnet
+    chainId=11155111,  # Ethereum Sepolia testnet (use 1 for Ethereum Mainnet)
     rpcUrl=os.getenv("RPC_URL"),
     signer=os.getenv("PRIVATE_KEY"),
     ipfs="pinata",  # Options: "pinata", "filecoinPin", "node"
@@ -294,7 +294,7 @@ Browse these files to find appropriate skill and domain slugs. For more informat
 
 ## 🚀 Coming Soon
 
-- More chains (currently Ethereum Sepolia only)
+- More chains (currently Ethereum Sepolia + Ethereum Mainnet)
 - Support for validations
 - Enhanced x402 payments
 - Semantic/Vectorial search
