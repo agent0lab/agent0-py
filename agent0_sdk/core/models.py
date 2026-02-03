@@ -165,8 +165,11 @@ class AgentSummary:
     description: str
     owners: List[Address]
     operators: List[Address]
-    mcp: bool
-    a2a: bool
+    # Endpoint strings (new unified search + Jan 2026 schema)
+    mcp: Optional[str] = None
+    a2a: Optional[str] = None
+    web: Optional[str] = None
+    email: Optional[str] = None
     ens: Optional[str]
     did: Optional[str]
     walletAddress: Optional[Address]
@@ -175,8 +178,18 @@ class AgentSummary:
     mcpTools: List[str]
     mcpPrompts: List[str]
     mcpResources: List[str]
+    oasfSkills: List[str] = field(default_factory=list)
+    oasfDomains: List[str] = field(default_factory=list)
     active: bool
     x402support: bool = False
+    createdAt: Optional[int] = None
+    updatedAt: Optional[int] = None
+    lastActivity: Optional[int] = None
+    agentURI: Optional[str] = None
+    agentURIType: Optional[str] = None
+    feedbackCount: Optional[int] = None
+    averageValue: Optional[float] = None
+    semanticScore: Optional[float] = None
     extras: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -257,30 +270,98 @@ class Feedback:
 
 
 @dataclass
-class SearchParams:
-    """Parameters for agent search."""
+class FeedbackFilters:
+    hasFeedback: Optional[bool] = None
+    hasNoFeedback: Optional[bool] = None
+    includeRevoked: Optional[bool] = None
+    minValue: Optional[float] = None
+    maxValue: Optional[float] = None
+    minCount: Optional[int] = None
+    maxCount: Optional[int] = None
+    fromReviewers: Optional[List[Address]] = None
+    endpoint: Optional[str] = None
+    hasResponse: Optional[bool] = None
+    tag1: Optional[str] = None
+    tag2: Optional[str] = None
+    tag: Optional[str] = None
+
+
+DateLike = Union[datetime, str, int]
+
+
+@dataclass
+class SearchFilters:
+    # Chain / identity
     chains: Optional[Union[List[ChainId], Literal["all"]]] = None
-    name: Optional[str] = None  # case-insensitive substring
-    description: Optional[str] = None  # semantic; vector distance < threshold
+    agentIds: Optional[List[AgentId]] = None
+
+    # Text
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+    # Owners / operators
     owners: Optional[List[Address]] = None
     operators: Optional[List[Address]] = None
-    mcp: Optional[bool] = None
-    a2a: Optional[bool] = None
-    ens: Optional[str] = None  # exact, case-insensitive
-    did: Optional[str] = None  # exact
+
+    # Endpoint existence
+    hasRegistrationFile: Optional[bool] = None
+    hasWeb: Optional[bool] = None
+    hasMCP: Optional[bool] = None
+    hasA2A: Optional[bool] = None
+    hasOASF: Optional[bool] = None
+    hasEndpoints: Optional[bool] = None
+
+    # Endpoint substring contains
+    webContains: Optional[str] = None
+    mcpContains: Optional[str] = None
+    a2aContains: Optional[str] = None
+    ensContains: Optional[str] = None
+    didContains: Optional[str] = None
+
+    # Wallet
     walletAddress: Optional[Address] = None
+
+    # Capability arrays (ANY semantics)
     supportedTrust: Optional[List[str]] = None
     a2aSkills: Optional[List[str]] = None
     mcpTools: Optional[List[str]] = None
     mcpPrompts: Optional[List[str]] = None
     mcpResources: Optional[List[str]] = None
-    active: Optional[bool] = True
+    oasfSkills: Optional[List[str]] = None
+    oasfDomains: Optional[List[str]] = None
+
+    # Status
+    active: Optional[bool] = None
     x402support: Optional[bool] = None
-    deduplicate_cross_chain: bool = False  # Deduplicate same agent across chains
+
+    # Time filters
+    registeredAtFrom: Optional[DateLike] = None
+    registeredAtTo: Optional[DateLike] = None
+    updatedAtFrom: Optional[DateLike] = None
+    updatedAtTo: Optional[DateLike] = None
+
+    # Metadata filters (two-phase)
+    hasMetadataKey: Optional[str] = None
+    metadataValue: Optional[Dict[str, str]] = None  # { key, value }
+
+    # Semantic search
+    keyword: Optional[str] = None
+
+    # Feedback filters (two-phase)
+    feedback: Optional[FeedbackFilters] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary, filtering out None values."""
         return {k: v for k, v in self.__dict__.items() if v is not None}
+
+
+@dataclass
+class SearchOptions:
+    sort: Optional[List[str]] = None
+    pageSize: Optional[int] = None
+    cursor: Optional[str] = None
+    semanticMinScore: Optional[float] = None
+    semanticTopK: Optional[int] = None
 
 
 @dataclass

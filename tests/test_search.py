@@ -43,7 +43,7 @@ logging.basicConfig(
 logging.getLogger('agent0_sdk').setLevel(logging.DEBUG)
 logging.getLogger('agent0_sdk.core').setLevel(logging.DEBUG)
 
-from agent0_sdk import SDK, SearchParams
+from agent0_sdk import SDK, SearchFilters
 from tests.config import CHAIN_ID, RPC_URL, AGENT_PRIVATE_KEY, SUBGRAPH_URL, AGENT_ID, print_config
 
 RUN_LIVE_TESTS = os.getenv("RUN_LIVE_TESTS", "0") != "0"
@@ -122,7 +122,7 @@ def main():
     print(f"\n📍 Step 5: Search Agents by ENS Domain")
     print("-" * 60)
     try:
-        results = sdk.searchAgents(ens="test")
+        results = sdk.searchAgents(ensContains="test")
         agents = results.get('items', [])
         print(f"✅ Found {len(agents)} agent(s) with ENS matching 'test'")
         for i, agent in enumerate(agents[:3], 1):
@@ -163,7 +163,7 @@ def main():
     print(f"\n📍 Step 8: Search Agents by Reputation (Minimum Average Value)")
     print("-" * 60)
     try:
-        results = sdk.searchAgentsByReputation(minAverageValue=80)
+        results = sdk.searchAgents(feedback={"minValue": 80})
         agents = results.get('items', [])
         print(f"✅ Found {len(agents)} agent(s) with average value >= 80")
         for i, agent in enumerate(agents[:3], 1):
@@ -181,16 +181,11 @@ def main():
         # Using tags that actually exist in feedback: "enterprise" appears frequently
         # Note: GraphQL query has known issue with mixing filters, so using includeRevoked=True as workaround
         # which may affect results, but at least the query will execute
-        results = sdk.searchAgentsByReputation(
-            tags=["enterprise"],
-            minAverageValue=0,  # No threshold to see any results
-            includeRevoked=True  # Workaround for GraphQL query builder issue
-        )
+        results = sdk.searchAgents(feedback={"tag": "enterprise", "includeRevoked": True})
         agents = results.get('items', [])
         print(f"✅ Found {len(agents)} agent(s) with 'enterprise' tag")
         for i, agent in enumerate(agents[:3], 1):
-            # AgentSummary object - use attributes
-            avg_value = agent.extras.get('averageValue', 'N/A') if agent.extras else 'N/A'
+            avg_value = agent.averageValue if getattr(agent, "averageValue", None) is not None else 'N/A'
             print(f"   {i}. {agent.name} - Avg: {avg_value}")
     except Exception as e:
         print(f"❌ Failed to search by reputation tags: {e}")
@@ -199,14 +194,13 @@ def main():
     print("-" * 60)
     try:
         # Using capabilities that actually exist in feedback: code_generation, problem_solving, data_analysis
-        results = sdk.searchAgentsByReputation(
-            capabilities=["code_generation"],
-            minAverageValue=0  # No threshold to see any results
-        )
+        # Capability filtering via off-chain feedback file fields is not supported in unified search;
+        # demonstrate feedback.hasResponse instead.
+        results = sdk.searchAgents(feedback={"hasResponse": True})
         agents = results.get('items', [])
-        print(f"✅ Found {len(agents)} agent(s) with 'code_generation' capability")
+        print(f"✅ Found {len(agents)} agent(s) with feedback responses")
         for i, agent in enumerate(agents[:3], 1):
-            avg_value = agent.extras.get('averageValue', 'N/A') if hasattr(agent, 'extras') and agent.extras else 'N/A'
+            avg_value = agent.averageValue if getattr(agent, "averageValue", None) is not None else 'N/A'
             print(f"   {i}. {agent.name}")
             print(f"      Avg Value: {avg_value}")
     except Exception as e:
@@ -216,15 +210,11 @@ def main():
     print("-" * 60)
     try:
         # Using skills that actually exist in feedback: python, machine_learning, cloud_computing, web_development
-        results = sdk.searchAgentsByReputation(
-            skills=["python"],
-            minAverageValue=0  # No threshold to see any results
-        )
+        results = sdk.searchAgents(feedback={"tag": "python"})
         agents = results.get('items', [])
         print(f"✅ Found {len(agents)} agent(s) with 'python' skill")
         for i, agent in enumerate(agents[:3], 1):
-            # AgentSummary object - use attributes
-            avg_value = agent.extras.get('averageValue', 'N/A') if agent.extras else 'N/A'
+            avg_value = agent.averageValue if getattr(agent, "averageValue", None) is not None else 'N/A'
             print(f"   {i}. {agent.name}")
             print(f"      Average Value: {avg_value}")
             if agent.a2aSkills:
@@ -426,5 +416,8 @@ def test_search_live():
         pytest.skip("RPC_URL not set")
     if not SUBGRAPH_URL or not SUBGRAPH_URL.strip():
         pytest.skip("SUBGRAPH_URL not set")
-
-    main()
+    # Strict integration checks (do not swallow exceptions).
+    sdk = SDK(chainId=CHAIN_ID, rpcUrl=RPC_URL)
+    results = sdk.searchAgents(filters={}, options={"pageSize": 5, "sort": []})
+    assert "items" in results
+    assert len(results["items"]) > 0

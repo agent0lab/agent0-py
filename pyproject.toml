@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent0-sdk"
-version = "1.4.2"
+version = "1.5.0b1"
 description = "Python SDK for agent portability, discovery and trust based on ERC-8004"
 authors = [
     {name = "Agent0 Team", email = "team@ag0.xyz"}

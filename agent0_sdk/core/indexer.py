@@ -37,11 +37,13 @@ from datetime import datetime
 
 from .models import (
     AgentId, ChainId, Address, URI, Timestamp,
-    AgentSummary, Feedback, SearchParams, SearchFeedbackParams
+    AgentSummary, Feedback, SearchFilters, SearchOptions, SearchFeedbackParams
 )
 from .web3_client import Web3Client
 
 logger = logging.getLogger(__name__)
+
+from .semantic_search_client import SemanticSearchClient
 
 
 class AgentIndexer:
@@ -323,10 +325,25 @@ class AgentIndexer:
         registration_data: Dict[str, Any]
     ) -> AgentSummary:
         """Create agent summary from registration data."""
-        # Extract endpoints
+        # Extract endpoints (legacy/non-subgraph path)
         endpoints = registration_data.get("endpoints", [])
-        mcp = any(ep.get("name") == "MCP" for ep in endpoints)
-        a2a = any(ep.get("name") == "A2A" for ep in endpoints)
+        mcp: Optional[str] = None
+        a2a: Optional[str] = None
+        web: Optional[str] = None
+        email: Optional[str] = None
+        for ep in endpoints:
+            name = (ep.get("name") or "").upper()
+            value = ep.get("endpoint")
+            if not isinstance(value, str):
+                continue
+            if name == "MCP":
+                mcp = value
+            elif name == "A2A":
+                a2a = value
+            elif name == "WEB":
+                web = value
+            elif name == "EMAIL":
+                email = value
         
         ens = None
         did = None
@@ -352,6 +369,8 @@ class AgentIndexer:
             operators=[],  # Would be populated from contract
             mcp=mcp,
             a2a=a2a,
+            web=web,
+            email=email,
             ens=ens,
             did=did,
             walletAddress=registration_data.get("walletAddress"),
@@ -360,6 +379,8 @@ class AgentIndexer:
             mcpTools=mcp_tools,
             mcpPrompts=mcp_prompts,
             mcpResources=mcp_resources,
+            oasfSkills=[],
+            oasfDomains=[],
             active=registration_data.get("active", True),
             extras={}
         )
@@ -422,18 +443,28 @@ class AgentIndexer:
                 description=reg_file.get('description', ''),
                 owners=[agent_data.get('owner', '')],
                 operators=agent_data.get('operators', []),
-                mcp=reg_file.get('mcpEndpoint') is not None,
-                a2a=reg_file.get('a2aEndpoint') is not None,
+                mcp=reg_file.get('mcpEndpoint') or None,
+                a2a=reg_file.get('a2aEndpoint') or None,
+                web=reg_file.get('webEndpoint') or None,
+                email=reg_file.get('emailEndpoint') or None,
                 ens=reg_file.get('ens'),
                 did=reg_file.get('did'),
-                walletAddress=reg_file.get('agentWallet'),
+                walletAddress=agent_data.get('agentWallet'),
                 supportedTrusts=reg_file.get('supportedTrusts', []),
                 a2aSkills=reg_file.get('a2aSkills', []),
                 mcpTools=reg_file.get('mcpTools', []),
                 mcpPrompts=reg_file.get('mcpPrompts', []),
                 mcpResources=reg_file.get('mcpResources', []),
+                oasfSkills=reg_file.get('oasfSkills', []) or [],
+                oasfDomains=reg_file.get('oasfDomains', []) or [],
                 active=reg_file.get('active', True),
                 x402support=reg_file.get('x402Support', reg_file.get('x402support', False)),
+                createdAt=agent_data.get('createdAt'),
+                updatedAt=agent_data.get('updatedAt'),
+                lastActivity=agent_data.get('lastActivity'),
+                agentURI=agent_data.get('agentURI'),
+                agentURIType=agent_data.get('agentURIType'),
+                feedbackCount=agent_data.get('totalFeedback'),
                 extras={}
             )
             
@@ -442,59 +473,714 @@ class AgentIndexer:
 
     def search_agents(
         self,
-        params: SearchParams,
-        sort: List[str],
-        page_size: int,
-        cursor: Optional[str] = None,
+        filters: SearchFilters,
+        options: SearchOptions,
     ) -> Dict[str, Any]:
-        """Search for agents by querying the subgraph or blockchain."""
-        # Handle "all" chains shorthand
-        if params.chains == "all":
-            params.chains = self._get_all_configured_chains()
-            logger.info(f"Expanding 'all' to configured chains: {params.chains}")
+        """Unified search entry point (replaces all legacy search variants)."""
+        start_ms = int(time.time() * 1000)
 
-        # If chains are explicitly specified (even a single chain), use multi-chain path
-        # This ensures the correct subgraph client is used for the requested chain(s)
-        if params.chains and len(params.chains) > 0:
-            # Validate chains are configured
-            available_chains = set(self._get_all_configured_chains())
-            requested_chains = set(params.chains)
-            invalid_chains = requested_chains - available_chains
+        if filters.keyword and str(filters.keyword).strip():
+            out = self._search_unified_with_keyword(filters, options)
+        else:
+            out = self._search_unified_no_keyword(filters, options)
 
-            if invalid_chains:
-                logger.warning(
-                    f"Requested chains not configured: {invalid_chains}. "
-                    f"Available chains: {available_chains}"
-                )
-                # Filter to valid chains only
-                valid_chains = list(requested_chains & available_chains)
-                if not valid_chains:
-                    return {
-                        "items": [],
-                        "nextCursor": None,
-                        "meta": {
-                            "chains": list(requested_chains),
-                            "successfulChains": [],
-                            "failedChains": list(requested_chains),
-                            "error": f"No valid chains configured. Available: {list(available_chains)}"
-                        }
+        meta = out.get("meta") or {}
+        timing = meta.get("timing") or {}
+        timing["totalMs"] = int(time.time() * 1000) - start_ms
+        meta["timing"] = timing
+        out["meta"] = meta
+        return out
+
+    # -------------------------------------------------------------------------
+    # Unified search (v2)
+    # -------------------------------------------------------------------------
+
+    def _parse_sort(self, sort: Optional[List[str]], keyword_present: bool) -> tuple[str, str]:
+        default = "semanticScore:desc" if keyword_present else "updatedAt:desc"
+        spec = (sort[0] if sort and len(sort) > 0 else default) or default
+        parts = spec.split(":", 1)
+        field = parts[0] if parts and parts[0] else ("semanticScore" if keyword_present else "updatedAt")
+        direction = (parts[1] if len(parts) > 1 else "desc").lower()
+        if direction not in ("asc", "desc"):
+            direction = "desc"
+        return field, direction
+
+    def _resolve_chains(self, filters: SearchFilters, keyword_present: bool) -> List[int]:
+        if filters.chains == "all":
+            return self._get_all_configured_chains()
+        if isinstance(filters.chains, list) and len(filters.chains) > 0:
+            return filters.chains
+        if keyword_present:
+            return self._get_all_configured_chains()
+        return [self.web3_client.chain_id]
+
+    def _parse_cursor_offset(self, cursor: Optional[str]) -> int:
+        if not cursor:
+            return 0
+        try:
+            n = int(cursor)
+            return n if n >= 0 else 0
+        except Exception:
+            return 0
+
+    def _parse_per_chain_cursor(self, chains: List[int], cursor: Optional[str]) -> Dict[int, int]:
+        out: Dict[int, int] = {c: 0 for c in chains}
+        if not cursor:
+            return out
+        try:
+            data = json.loads(cursor)
+            if isinstance(data, dict):
+                for c in chains:
+                    v = data.get(str(c))
+                    if isinstance(v, int) and v >= 0:
+                        out[c] = v
+                return out
+        except Exception:
+            pass
+        if len(chains) == 1:
+            try:
+                out[chains[0]] = max(0, int(cursor))
+            except Exception:
+                pass
+        return out
+
+    def _encode_per_chain_cursor(self, skips: Dict[int, int]) -> str:
+        return json.dumps({str(k): int(v) for k, v in sorted(skips.items(), key=lambda kv: kv[0])})
+
+    def _to_unix_seconds(self, dt: Any) -> int:
+        if isinstance(dt, int):
+            return dt
+        if isinstance(dt, datetime):
+            return int(dt.timestamp())
+        s = str(dt).strip()
+        if not s:
+            raise ValueError("Empty date")
+        # If no timezone, treat as UTC by appending 'Z'
+        if not ("Z" in s or "z" in s or "+" in s or "-" in s[-6:]):
+            s = f"{s}Z"
+        return int(datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp())
+
+    def _normalize_agent_ids(self, filters: SearchFilters, chains: List[int]) -> Optional[Dict[int, List[str]]]:
+        if not filters.agentIds:
+            return None
+        by_chain: Dict[int, List[str]] = {}
+        for aid in filters.agentIds:
+            s = str(aid)
+            if ":" in s:
+                chain_str = s.split(":", 1)[0]
+                try:
+                    chain_id = int(chain_str)
+                except Exception:
+                    continue
+                by_chain.setdefault(chain_id, []).append(s)
+            else:
+                if len(chains) != 1:
+                    raise ValueError("agentIds without chain prefix are only allowed when searching exactly one chain.")
+                by_chain.setdefault(chains[0], []).append(f"{chains[0]}:{s}")
+        return by_chain
+
+    def _build_where_v2(self, filters: SearchFilters, ids_for_chain: Optional[List[str]] = None) -> Dict[str, Any]:
+        base: Dict[str, Any] = {}
+        and_conditions: List[Dict[str, Any]] = []
+
+        # Default: only agents with registration files
+        if filters.hasRegistrationFile is False:
+            base["registrationFile"] = None
+        else:
+            base["registrationFile_not"] = None
+
+        if ids_for_chain:
+            base["id_in"] = ids_for_chain
+
+        if filters.walletAddress:
+            base["agentWallet"] = str(filters.walletAddress).lower()
+
+        # Feedback existence filters can be pushed down via Agent.totalFeedback when they are the ONLY feedback constraint.
+        fb = filters.feedback
+        if fb and (getattr(fb, "hasFeedback", False) or getattr(fb, "hasNoFeedback", False)):
+            has_threshold = any(
+                x is not None
+                for x in [
+                    getattr(fb, "minCount", None),
+                    getattr(fb, "maxCount", None),
+                    getattr(fb, "minValue", None),
+                    getattr(fb, "maxValue", None),
+                ]
+            )
+            has_any_constraint = any(
+                [
+                    bool(getattr(fb, "hasResponse", False)),
+                    bool(getattr(fb, "fromReviewers", None)),
+                    bool(getattr(fb, "endpoint", None)),
+                    bool(getattr(fb, "tag", None)),
+                    bool(getattr(fb, "tag1", None)),
+                    bool(getattr(fb, "tag2", None)),
+                ]
+            )
+            if not has_threshold and not has_any_constraint:
+                if getattr(fb, "hasFeedback", False):
+                    base["totalFeedback_gt"] = "0"
+                if getattr(fb, "hasNoFeedback", False):
+                    base["totalFeedback"] = "0"
+
+        if filters.owners:
+            base["owner_in"] = [str(o).lower() for o in filters.owners]
+
+        if filters.operators:
+            ops = [str(o).lower() for o in filters.operators]
+            and_conditions.append({"or": [{"operators_contains": [op]} for op in ops]})
+
+        if filters.registeredAtFrom is not None:
+            base["createdAt_gte"] = self._to_unix_seconds(filters.registeredAtFrom)
+        if filters.registeredAtTo is not None:
+            base["createdAt_lte"] = self._to_unix_seconds(filters.registeredAtTo)
+        if filters.updatedAtFrom is not None:
+            base["updatedAt_gte"] = self._to_unix_seconds(filters.updatedAtFrom)
+        if filters.updatedAtTo is not None:
+            base["updatedAt_lte"] = self._to_unix_seconds(filters.updatedAtTo)
+
+        rf: Dict[str, Any] = {}
+        if filters.name:
+            rf["name_contains_nocase"] = filters.name
+        if filters.description:
+            rf["description_contains_nocase"] = filters.description
+        if filters.ensContains:
+            rf["ens_contains_nocase"] = filters.ensContains
+        if filters.didContains:
+            rf["did_contains_nocase"] = filters.didContains
+        if filters.active is not None:
+            rf["active"] = filters.active
+        if filters.x402support is not None:
+            rf["x402Support"] = filters.x402support
+
+        if filters.hasMCP is not None:
+            rf["mcpEndpoint_not" if filters.hasMCP else "mcpEndpoint"] = None
+        if filters.hasA2A is not None:
+            rf["a2aEndpoint_not" if filters.hasA2A else "a2aEndpoint"] = None
+        if filters.hasWeb is not None:
+            rf["webEndpoint_not" if filters.hasWeb else "webEndpoint"] = None
+        if filters.hasOASF is not None:
+            # Exact semantics: true iff (oasfSkills OR oasfDomains) is non-empty (via subgraph derived field).
+            rf["hasOASF"] = bool(filters.hasOASF)
+
+        if filters.mcpContains:
+            rf["mcpEndpoint_contains_nocase"] = filters.mcpContains
+        if filters.a2aContains:
+            rf["a2aEndpoint_contains_nocase"] = filters.a2aContains
+        if filters.webContains:
+            rf["webEndpoint_contains_nocase"] = filters.webContains
+
+        if rf:
+            base["registrationFile_"] = rf
+
+        def any_of_list(field: str, values: Optional[List[str]]):
+            if not values:
+                return
+            and_conditions.append({"or": [{"registrationFile_": {f"{field}_contains": [v]}} for v in values]})
+
+        any_of_list("supportedTrusts", filters.supportedTrust)
+        any_of_list("a2aSkills", filters.a2aSkills)
+        any_of_list("mcpTools", filters.mcpTools)
+        any_of_list("mcpPrompts", filters.mcpPrompts)
+        any_of_list("mcpResources", filters.mcpResources)
+        any_of_list("oasfSkills", filters.oasfSkills)
+        any_of_list("oasfDomains", filters.oasfDomains)
+
+        if filters.hasEndpoints is not None:
+            if filters.hasEndpoints:
+                and_conditions.append(
+                    {
+                        "or": [
+                            {"registrationFile_": {"webEndpoint_not": None}},
+                            {"registrationFile_": {"mcpEndpoint_not": None}},
+                            {"registrationFile_": {"a2aEndpoint_not": None}},
+                        ]
                     }
-                params.chains = valid_chains
+                )
+            else:
+                and_conditions.append({"registrationFile_": {"webEndpoint": None, "mcpEndpoint": None, "a2aEndpoint": None}})
 
-            return asyncio.run(
-                self._search_agents_across_chains(params, sort, page_size, cursor)
+        if not and_conditions:
+            return base
+        return {"and": [base, *and_conditions]}
+
+    def _intersect_ids(self, a: Optional[List[str]], b: Optional[List[str]]) -> Optional[List[str]]:
+        if a is None and b is None:
+            return None
+        if a is None:
+            return b or []
+        if b is None:
+            return a or []
+        bset = set(b)
+        return [x for x in a if x in bset]
+
+    def _utf8_to_hex(self, s: str) -> str:
+        return "0x" + s.encode("utf-8").hex()
+
+    def _prefilter_by_metadata(self, filters: SearchFilters, chains: List[int]) -> Optional[Dict[int, List[str]]]:
+        key = filters.hasMetadataKey or (filters.metadataValue.get("key") if isinstance(filters.metadataValue, dict) else None)
+        if not key:
+            return None
+        value_str = None
+        if isinstance(filters.metadataValue, dict):
+            value_str = filters.metadataValue.get("value")
+        value_hex = self._utf8_to_hex(str(value_str)) if value_str is not None else None
+
+        first = 1000
+        max_rows = 5000
+        out: Dict[int, List[str]] = {}
+
+        for chain_id in chains:
+            sub = self._get_subgraph_client_for_chain(chain_id)
+            if sub is None:
+                out[chain_id] = []
+                continue
+            ids: List[str] = []
+            for skip in range(0, max_rows, first):
+                where: Dict[str, Any] = {"key": key}
+                if value_hex is not None:
+                    where["value"] = value_hex
+                rows = sub.query_agent_metadatas(where=where, first=first, skip=skip)
+                for r in rows:
+                    agent = r.get("agent") or {}
+                    aid = agent.get("id")
+                    if aid:
+                        ids.append(str(aid))
+                if len(rows) < first:
+                    break
+            out[chain_id] = sorted(list(set(ids)))
+        return out
+
+    def _prefilter_by_feedback(
+        self,
+        filters: SearchFilters,
+        chains: List[int],
+        candidate_ids_by_chain: Optional[Dict[int, List[str]]] = None,
+    ) -> tuple[Optional[Dict[int, List[str]]], Dict[str, Dict[str, float]]]:
+        fb = filters.feedback
+        if fb is None:
+            return None, {}
+
+        include_revoked = bool(getattr(fb, "includeRevoked", False))
+        has_threshold = any(
+            x is not None
+            for x in [
+                getattr(fb, "minCount", None),
+                getattr(fb, "maxCount", None),
+                getattr(fb, "minValue", None),
+                getattr(fb, "maxValue", None),
+            ]
+        )
+        has_any_constraint = any(
+            [
+                bool(getattr(fb, "hasResponse", False)),
+                bool(getattr(fb, "fromReviewers", None)),
+                bool(getattr(fb, "endpoint", None)),
+                bool(getattr(fb, "tag", None)),
+                bool(getattr(fb, "tag1", None)),
+                bool(getattr(fb, "tag2", None)),
+            ]
+        )
+
+        # If hasNoFeedback/hasFeedback are the ONLY feedback constraint, we push them down via Agent.totalFeedback in _build_where_v2.
+        if getattr(fb, "hasNoFeedback", False) and not has_threshold and not has_any_constraint:
+            return None, {}
+        if getattr(fb, "hasFeedback", False) and not has_threshold and not has_any_constraint:
+            return None, {}
+
+        # Otherwise, hasNoFeedback requires an explicit candidate set to subtract from.
+        if getattr(fb, "hasNoFeedback", False):
+            if not candidate_ids_by_chain or not any(candidate_ids_by_chain.get(c) for c in chains):
+                raise ValueError("feedback.hasNoFeedback requires a pre-filtered candidate set (e.g. agentIds or keyword).")
+
+        first = 1000
+        max_rows = 5000
+
+        sums: Dict[str, float] = {}
+        counts: Dict[str, int] = {}
+        matched_by_chain: Dict[int, set[str]] = {}
+
+        for chain_id in chains:
+            sub = self._get_subgraph_client_for_chain(chain_id)
+            if sub is None:
+                continue
+            candidates = (candidate_ids_by_chain or {}).get(chain_id)
+
+            base: Dict[str, Any] = {}
+            and_conditions: List[Dict[str, Any]] = []
+
+            if not include_revoked:
+                base["isRevoked"] = False
+            from_reviewers = getattr(fb, "fromReviewers", None)
+            if from_reviewers:
+                base["clientAddress_in"] = [str(a).lower() for a in from_reviewers]
+            endpoint = getattr(fb, "endpoint", None)
+            if endpoint:
+                base["endpoint_contains_nocase"] = endpoint
+            if candidates:
+                base["agent_in"] = candidates
+
+            tag1 = getattr(fb, "tag1", None)
+            tag2 = getattr(fb, "tag2", None)
+            tag = getattr(fb, "tag", None)
+            if tag1:
+                base["tag1"] = tag1
+            if tag2:
+                base["tag2"] = tag2
+            if tag:
+                and_conditions.append({"or": [{"tag1": tag}, {"tag2": tag}]})
+
+            where: Dict[str, Any] = {"and": [base, *and_conditions]} if and_conditions else base
+
+            for skip in range(0, max_rows, first):
+                rows = sub.query_feedbacks_minimal(where=where, first=first, skip=skip, order_by="createdAt", order_direction="desc")
+                for r in rows:
+                    agent = r.get("agent") or {}
+                    aid = agent.get("id")
+                    if not aid:
+                        continue
+                    if getattr(fb, "hasResponse", False):
+                        responses = r.get("responses") or []
+                        if not isinstance(responses, list) or len(responses) == 0:
+                            continue
+                    try:
+                        v = float(r.get("value"))
+                    except Exception:
+                        continue
+                    aid_s = str(aid)
+                    sums[aid_s] = sums.get(aid_s, 0.0) + v
+                    counts[aid_s] = counts.get(aid_s, 0) + 1
+                    matched_by_chain.setdefault(chain_id, set()).add(aid_s)
+                if len(rows) < first:
+                    break
+
+        stats: Dict[str, Dict[str, float]] = {}
+        for aid, cnt in counts.items():
+            avg = (sums.get(aid, 0.0) / cnt) if cnt > 0 else 0.0
+            stats[aid] = {"count": float(cnt), "avg": float(avg)}
+
+        def passes(aid: str) -> bool:
+            st = stats.get(aid, {"count": 0.0, "avg": 0.0})
+            cnt = st["count"]
+            avg = st["avg"]
+            min_count = getattr(fb, "minCount", None)
+            max_count = getattr(fb, "maxCount", None)
+            min_val = getattr(fb, "minValue", None)
+            max_val = getattr(fb, "maxValue", None)
+            if min_count is not None and cnt < float(min_count):
+                return False
+            if max_count is not None and cnt > float(max_count):
+                return False
+            if min_val is not None and avg < float(min_val):
+                return False
+            if max_val is not None and avg > float(max_val):
+                return False
+            return True
+
+        allow: Dict[int, List[str]] = {}
+        for chain_id in chains:
+            matched = matched_by_chain.get(chain_id, set())
+            candidates = (candidate_ids_by_chain or {}).get(chain_id)
+
+            if getattr(fb, "hasNoFeedback", False):
+                base_list = candidates or []
+                allow[chain_id] = [x for x in base_list if x not in matched]
+                continue
+
+            ids = list(matched)
+            if has_threshold:
+                ids = [x for x in ids if passes(x)]
+            elif has_any_constraint or getattr(fb, "hasFeedback", False):
+                ids = [x for x in ids if counts.get(x, 0) > 0]
+
+            if candidates:
+                cset = set(candidates)
+                ids = [x for x in ids if x in cset]
+
+            allow[chain_id] = ids
+
+        return allow, stats
+
+    def _search_unified_no_keyword(self, filters: SearchFilters, options: SearchOptions) -> Dict[str, Any]:
+        if not self.subgraph_client:
+            raise ValueError("Subgraph client required for searchAgents")
+
+        field, direction = self._parse_sort(options.sort, False)
+        chains = self._resolve_chains(filters, False)
+        page_size = options.pageSize or 50
+        per_chain_skip = self._parse_per_chain_cursor(chains, options.cursor)
+        ids_by_chain = self._normalize_agent_ids(filters, chains)
+        metadata_ids_by_chain = self._prefilter_by_metadata(filters, chains)
+        candidate_for_feedback: Dict[int, List[str]] = {}
+        for c in chains:
+            ids0 = self._intersect_ids((ids_by_chain or {}).get(c), (metadata_ids_by_chain or {}).get(c))
+            if ids0:
+                candidate_for_feedback[c] = ids0
+        feedback_ids_by_chain, feedback_stats_by_id = self._prefilter_by_feedback(
+            filters, chains, candidate_for_feedback if candidate_for_feedback else None
+        )
+
+        order_by = field if field in ("createdAt", "updatedAt", "name", "chainId", "lastActivity", "totalFeedback") else "updatedAt"
+        if field == "feedbackCount":
+            order_by = "totalFeedback"
+
+        # Fetch one page per chain (page_size + 1) and merge client-side.
+        chain_results: List[Dict[str, Any]] = []
+        successful: List[int] = []
+        failed: List[int] = []
+
+        for chain_id in chains:
+            client = self._get_subgraph_client_for_chain(chain_id)
+            if client is None:
+                failed.append(chain_id)
+                chain_results.append({"chainId": chain_id, "items": []})
+                continue
+            try:
+                ids0 = self._intersect_ids((ids_by_chain or {}).get(chain_id), (metadata_ids_by_chain or {}).get(chain_id))
+                ids = self._intersect_ids(ids0, (feedback_ids_by_chain or {}).get(chain_id))
+                if ids is not None and len(ids) == 0:
+                    successful.append(chain_id)
+                    chain_results.append({"chainId": chain_id, "items": []})
+                    continue
+                where = self._build_where_v2(filters, ids)
+                agents = client.get_agents_v2(where=where, first=page_size + 1, skip=per_chain_skip.get(chain_id, 0), order_by=order_by, order_direction=direction)
+                successful.append(chain_id)
+                chain_results.append({"chainId": chain_id, "items": agents})
+            except Exception:
+                failed.append(chain_id)
+                chain_results.append({"chainId": chain_id, "items": []})
+
+        # Convert to AgentSummary objects and k-way merge using the same sort field.
+        def to_summary(agent_data: Dict[str, Any]) -> AgentSummary:
+            reg_file = agent_data.get("registrationFile") or {}
+            if not isinstance(reg_file, dict):
+                reg_file = {}
+            aid = str(agent_data.get("id", ""))
+            st = feedback_stats_by_id.get(aid) or {}
+            return AgentSummary(
+                chainId=int(agent_data.get("chainId", 0)),
+                agentId=aid,
+                name=reg_file.get("name") or aid,
+                image=reg_file.get("image"),
+                description=reg_file.get("description", "") or "",
+                owners=[agent_data.get("owner", "")] if agent_data.get("owner") else [],
+                operators=agent_data.get("operators", []) or [],
+                mcp=reg_file.get("mcpEndpoint") or None,
+                a2a=reg_file.get("a2aEndpoint") or None,
+                web=reg_file.get("webEndpoint") or None,
+                email=reg_file.get("emailEndpoint") or None,
+                ens=reg_file.get("ens"),
+                did=reg_file.get("did"),
+                walletAddress=agent_data.get("agentWallet"),
+                supportedTrusts=reg_file.get("supportedTrusts", []) or [],
+                a2aSkills=reg_file.get("a2aSkills", []) or [],
+                mcpTools=reg_file.get("mcpTools", []) or [],
+                mcpPrompts=reg_file.get("mcpPrompts", []) or [],
+                mcpResources=reg_file.get("mcpResources", []) or [],
+                oasfSkills=reg_file.get("oasfSkills", []) or [],
+                oasfDomains=reg_file.get("oasfDomains", []) or [],
+                active=bool(reg_file.get("active", False)),
+                x402support=bool(reg_file.get("x402Support", reg_file.get("x402support", False))),
+                createdAt=agent_data.get("createdAt"),
+                updatedAt=agent_data.get("updatedAt"),
+                lastActivity=agent_data.get("lastActivity"),
+                agentURI=agent_data.get("agentURI"),
+                agentURIType=agent_data.get("agentURIType"),
+                feedbackCount=agent_data.get("totalFeedback"),
+                averageValue=float(st.get("avg")) if st.get("avg") is not None else None,
+                extras={},
             )
 
-        # Use subgraph if available (preferred)
-        if self.subgraph_client:
-            return self._search_agents_via_subgraph(params, sort, page_size, cursor)
+        per_chain_lists: Dict[int, List[AgentSummary]] = {r["chainId"]: [to_summary(a) for a in r["items"]] for r in chain_results}
+        indices: Dict[int, int] = {c: 0 for c in chains}
+        consumed: Dict[int, int] = {c: 0 for c in chains}
 
-        # Fallback to blockchain queries
-        return self._search_agents_via_blockchain(params, sort, page_size, cursor)
+        def key(agent: AgentSummary):
+            v = getattr(agent, field, None)
+            if v is None:
+                return 0
+            return v
+
+        def compare(a: AgentSummary, b: AgentSummary) -> bool:
+            # return True if a should come before b
+            if field == "name":
+                av = (a.name or "").lower()
+                bv = (b.name or "").lower()
+                return av < bv if direction == "asc" else av > bv
+            try:
+                av = float(key(a))
+                bv = float(key(b))
+            except Exception:
+                av = 0.0
+                bv = 0.0
+            return av < bv if direction == "asc" else av > bv
+
+        merged: List[AgentSummary] = []
+        while len(merged) < page_size:
+            best_chain: Optional[int] = None
+            best_item: Optional[AgentSummary] = None
+            for c in chains:
+                idx = indices[c]
+                arr = per_chain_lists.get(c, [])
+                if idx >= len(arr):
+                    continue
+                cand = arr[idx]
+                if best_item is None or compare(cand, best_item):
+                    best_item = cand
+                    best_chain = c
+            if best_item is None or best_chain is None:
+                break
+            merged.append(best_item)
+            indices[best_chain] += 1
+            consumed[best_chain] += 1
+
+        has_more = any(
+            (indices[c] < len(per_chain_lists.get(c, []))) or (len(per_chain_lists.get(c, [])) > page_size)
+            for c in chains
+        )
+        next_cursor = None
+        if has_more:
+            next_skips = {c: per_chain_skip.get(c, 0) + consumed.get(c, 0) for c in chains}
+            next_cursor = self._encode_per_chain_cursor(next_skips)
+
+        return {
+            "items": merged,
+            "nextCursor": next_cursor,
+            "meta": {
+                "chains": chains,
+                "successfulChains": successful,
+                "failedChains": failed,
+                "totalResults": 0,
+            },
+        }
+
+    def _search_unified_with_keyword(self, filters: SearchFilters, options: SearchOptions) -> Dict[str, Any]:
+        field, direction = self._parse_sort(options.sort, True)
+        page_size = options.pageSize or 50
+        offset = self._parse_cursor_offset(options.cursor)
+        chains = self._resolve_chains(filters, True)
+
+        client = SemanticSearchClient()
+        semantic_results = client.search(
+            str(filters.keyword),
+            min_score=options.semanticMinScore,
+            top_k=options.semanticTopK,
+        )
+
+        allowed = set(chains)
+        semantic_results = [r for r in semantic_results if r.chainId in allowed]
+        ids_by_chain: Dict[int, List[str]] = {}
+        score_by_id: Dict[str, float] = {}
+        for r in semantic_results:
+            ids_by_chain.setdefault(r.chainId, []).append(r.agentId)
+            score_by_id[r.agentId] = r.score
+
+        fetched: List[AgentSummary] = []
+        successful: List[int] = []
+        failed: List[int] = []
+
+        metadata_ids_by_chain = self._prefilter_by_metadata(filters, chains)
+        feedback_ids_by_chain, feedback_stats_by_id = self._prefilter_by_feedback(filters, chains, ids_by_chain)
+
+        # Query agents by id_in chunks and apply remaining filters via where.
+        chunk_size = 500
+        for chain_id in chains:
+            sub = self._get_subgraph_client_for_chain(chain_id)
+            ids = ids_by_chain.get(chain_id, [])
+            if sub is None:
+                if ids:
+                    failed.append(chain_id)
+                continue
+            try:
+                successful.append(chain_id)
+                for i in range(0, len(ids), chunk_size):
+                    chunk = ids[i : i + chunk_size]
+                    ids2 = self._intersect_ids(chunk, (metadata_ids_by_chain or {}).get(chain_id))
+                    ids3 = self._intersect_ids(ids2, (feedback_ids_by_chain or {}).get(chain_id))
+                    if ids3 is not None and len(ids3) == 0:
+                        continue
+                    if ids3 is not None and len(ids3) == 0:
+                        continue
+                    where = self._build_where_v2(filters, ids3)
+                    agents = sub.get_agents_v2(where=where, first=len(ids3 or []), skip=0, order_by="updatedAt", order_direction="desc")
+                    for a in agents:
+                        reg_file = a.get("registrationFile") or {}
+                        if not isinstance(reg_file, dict):
+                            reg_file = {}
+                        aid = str(a.get("id", ""))
+                        st = feedback_stats_by_id.get(aid) or {}
+                        fetched.append(
+                            AgentSummary(
+                                chainId=int(a.get("chainId", 0)),
+                                agentId=aid,
+                                name=reg_file.get("name") or aid,
+                                image=reg_file.get("image"),
+                                description=reg_file.get("description", "") or "",
+                                owners=[a.get("owner", "")] if a.get("owner") else [],
+                                operators=a.get("operators", []) or [],
+                                mcp=reg_file.get("mcpEndpoint") or None,
+                                a2a=reg_file.get("a2aEndpoint") or None,
+                                web=reg_file.get("webEndpoint") or None,
+                                email=reg_file.get("emailEndpoint") or None,
+                                ens=reg_file.get("ens"),
+                                did=reg_file.get("did"),
+                                walletAddress=a.get("agentWallet"),
+                                supportedTrusts=reg_file.get("supportedTrusts", []) or [],
+                                a2aSkills=reg_file.get("a2aSkills", []) or [],
+                                mcpTools=reg_file.get("mcpTools", []) or [],
+                                mcpPrompts=reg_file.get("mcpPrompts", []) or [],
+                                mcpResources=reg_file.get("mcpResources", []) or [],
+                                oasfSkills=reg_file.get("oasfSkills", []) or [],
+                                oasfDomains=reg_file.get("oasfDomains", []) or [],
+                                active=bool(reg_file.get("active", False)),
+                                x402support=bool(reg_file.get("x402Support", reg_file.get("x402support", False))),
+                                createdAt=a.get("createdAt"),
+                                updatedAt=a.get("updatedAt"),
+                                lastActivity=a.get("lastActivity"),
+                                agentURI=a.get("agentURI"),
+                                agentURIType=a.get("agentURIType"),
+                                feedbackCount=a.get("totalFeedback"),
+                                semanticScore=float(score_by_id.get(aid, 0.0)),
+                                averageValue=float(st.get("avg")) if st.get("avg") is not None else None,
+                                extras={},
+                            )
+                        )
+            except Exception:
+                failed.append(chain_id)
+
+        # Default keyword sorting: semanticScore desc, unless overridden.
+        sort_field = field if options.sort and len(options.sort) > 0 else "semanticScore"
+        sort_dir = direction if options.sort and len(options.sort) > 0 else "desc"
+
+        def sort_key(agent: AgentSummary):
+            v = getattr(agent, sort_field, None)
+            if v is None:
+                return 0
+            if sort_field == "name":
+                return (agent.name or "").lower()
+            try:
+                return float(v)
+            except Exception:
+                return 0
+
+        fetched.sort(key=sort_key, reverse=(sort_dir == "desc"))
+        page = fetched[offset : offset + page_size]
+        next_cursor = str(offset + page_size) if len(fetched) > offset + page_size else None
+
+        return {
+            "items": page,
+            "nextCursor": next_cursor,
+            "meta": {
+                "chains": chains,
+                "successfulChains": successful,
+                "failedChains": failed,
+                "totalResults": len(fetched),
+            },
+        }
 
     async def _search_agents_across_chains(
         self,
-        params: SearchParams,
+        params: SearchFilters,
         sort: List[str],
         page_size: int,
         cursor: Optional[str] = None,
@@ -566,20 +1252,20 @@ class AgentIndexer:
                     reg_file_where["active"] = params.active
                 if params.x402support is not None:
                     reg_file_where["x402support"] = params.x402support
-                if params.mcp is not None:
-                    if params.mcp:
+                if params.hasMCP is not None:
+                    if params.hasMCP:
                         reg_file_where["mcpEndpoint_not"] = None
                     else:
                         reg_file_where["mcpEndpoint"] = None
-                if params.a2a is not None:
-                    if params.a2a:
+                if params.hasA2A is not None:
+                    if params.hasA2A:
                         reg_file_where["a2aEndpoint_not"] = None
                     else:
                         reg_file_where["a2aEndpoint"] = None
-                if params.ens is not None:
-                    reg_file_where["ens"] = params.ens
-                if params.did is not None:
-                    reg_file_where["did"] = params.did
+                if params.ensContains is not None:
+                    reg_file_where["ens_contains_nocase"] = params.ensContains
+                if params.didContains is not None:
+                    reg_file_where["did_contains_nocase"] = params.didContains
                 if params.walletAddress is not None:
                     reg_file_where["agentWallet"] = params.walletAddress
 
@@ -766,7 +1452,7 @@ class AgentIndexer:
 
     def _search_agents_via_subgraph(
         self,
-        params: SearchParams,
+        params: SearchFilters,
         sort: List[str],
         page_size: int,
         cursor: Optional[str] = None,
@@ -782,20 +1468,20 @@ class AgentIndexer:
             reg_file_where["active"] = params.active
         if params.x402support is not None:
             reg_file_where["x402support"] = params.x402support
-        if params.mcp is not None:
-            if params.mcp:
+        if params.hasMCP is not None:
+            if params.hasMCP:
                 reg_file_where["mcpEndpoint_not"] = None
             else:
                 reg_file_where["mcpEndpoint"] = None
-        if params.a2a is not None:
-            if params.a2a:
+        if params.hasA2A is not None:
+            if params.hasA2A:
                 reg_file_where["a2aEndpoint_not"] = None
             else:
                 reg_file_where["a2aEndpoint"] = None
-        if params.ens is not None:
-            reg_file_where["ens"] = params.ens
-        if params.did is not None:
-            reg_file_where["did"] = params.did
+        if params.ensContains is not None:
+            reg_file_where["ens_contains_nocase"] = params.ensContains
+        if params.didContains is not None:
+            reg_file_where["did_contains_nocase"] = params.didContains
         if params.walletAddress is not None:
             reg_file_where["agentWallet"] = params.walletAddress
 
@@ -896,7 +1582,7 @@ class AgentIndexer:
     
     def _search_agents_via_blockchain(
         self,
-        params: SearchParams,
+        params: SearchFilters,
         sort: List[str],
         page_size: int,
         cursor: Optional[str] = None,
@@ -904,7 +1590,7 @@ class AgentIndexer:
         """Search for agents by querying the blockchain (fallback)."""
         return {"items": [], "nextCursor": None}
 
-    def _apply_filters(self, agents: List[Dict[str, Any]], params: SearchParams) -> List[Dict[str, Any]]:
+    def _apply_filters(self, agents: List[Dict[str, Any]], params: SearchFilters) -> List[Dict[str, Any]]:
         """Apply search filters to agents."""
         filtered = agents
         
@@ -924,17 +1610,21 @@ class AgentIndexer:
         if params.operators is not None:
             filtered = [a for a in filtered if any(op in params.operators for op in a.get("operators", []))]
         
-        if params.mcp is not None:
-            filtered = [a for a in filtered if a.get("mcp") == params.mcp]
+        if getattr(params, "hasMCP", None) is not None:
+            has = params.hasMCP
+            filtered = [a for a in filtered if bool(a.get("mcp")) == bool(has)]
         
-        if params.a2a is not None:
-            filtered = [a for a in filtered if a.get("a2a") == params.a2a]
+        if getattr(params, "hasA2A", None) is not None:
+            has = params.hasA2A
+            filtered = [a for a in filtered if bool(a.get("a2a")) == bool(has)]
         
-        if params.ens is not None:
-            filtered = [a for a in filtered if a.get("ens") and params.ens.lower() in a.get("ens", "").lower()]
+        if getattr(params, "ensContains", None) is not None:
+            needle = (params.ensContains or "").lower()
+            filtered = [a for a in filtered if needle in (a.get("ens") or "").lower()]
         
-        if params.did is not None:
-            filtered = [a for a in filtered if a.get("did") == params.did]
+        if getattr(params, "didContains", None) is not None:
+            needle = (params.didContains or "").lower()
+            filtered = [a for a in filtered if needle in (a.get("did") or "").lower()]
         
         if params.walletAddress is not None:
             filtered = [a for a in filtered if a.get("walletAddress") == params.walletAddress]
@@ -1591,7 +2281,7 @@ class AgentIndexer:
     def _apply_cross_chain_filters(
         self,
         agents: List[Dict[str, Any]],
-        params: SearchParams
+        params: SearchFilters
     ) -> List[Dict[str, Any]]:
         """
         Apply filters that couldn't be expressed in subgraph WHERE clause.
@@ -1656,7 +2346,7 @@ class AgentIndexer:
     def _deduplicate_agents_cross_chain(
         self,
         agents: List[Dict[str, Any]],
-        params: SearchParams
+        params: SearchFilters
     ) -> List[Dict[str, Any]]:
         """
         Deduplicate agents across chains (if requested).
@@ -1669,42 +2359,8 @@ class AgentIndexer:
         - Keep the first instance encountered
         - Add 'deployedOn' array with all chain IDs where this agent exists
         """
-        # Check if deduplication requested
-        if not params.deduplicate_cross_chain:
-            return agents
-
-        # Group agents by identity key
-        seen = {}
-        deduplicated = []
-
-        for agent in agents:
-            # Create identity key: (owner, name, description)
-            # This identifies "the same agent" across chains
-            owner = agent.get('owner', '').lower()
-            reg_file = agent.get('registrationFile', {})
-            name = reg_file.get('name', '')
-            description = reg_file.get('description', '')
-
-            identity_key = (owner, name, description)
-
-            if identity_key not in seen:
-                # First time seeing this agent
-                seen[identity_key] = agent
-
-                # Add deployedOn array
-                agent['deployedOn'] = [agent['chainId']]
-
-                deduplicated.append(agent)
-            else:
-                # Already seen this agent on another chain
-                # Add this chain to deployedOn array
-                seen[identity_key]['deployedOn'].append(agent['chainId'])
-
-        logger.info(
-            f"Deduplication: {len(agents)} agents → {len(deduplicated)} unique agents"
-        )
-
-        return deduplicated
+        # Deduplication across chains was part of an older API surface; the unified search does not deduplicate.
+        return agents
 
     def _sort_agents_cross_chain(
         self,

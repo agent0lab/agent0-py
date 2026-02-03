@@ -7,7 +7,7 @@ from datetime import datetime
 
 from agent0_sdk.core.models import (
     EndpointType, TrustModel, Endpoint, RegistrationFile,
-    AgentSummary, Feedback, SearchParams
+    AgentSummary, Feedback, SearchFilters
 )
 
 
@@ -141,8 +141,8 @@ class TestAgentSummary:
             description="A test agent",
             owners=["0x123"],
             operators=["0x456"],
-            mcp=True,
-            a2a=False,
+            mcp="https://mcp.example.com",
+            a2a=None,
             ens="test.eth",
             did=None,
             walletAddress="0x789",
@@ -151,14 +151,16 @@ class TestAgentSummary:
             mcpTools=["tool1"],
             mcpPrompts=[],
             mcpResources=[],
-            active=True
+            oasfSkills=[],
+            oasfDomains=[],
+            active=True,
         )
         
         assert summary.chainId == 1
         assert summary.agentId == "1:123"
         assert summary.name == "Test Agent"
-        assert summary.mcp is True
-        assert summary.a2a is False
+        assert summary.mcp == "https://mcp.example.com"
+        assert summary.a2a is None
         assert summary.ens == "test.eth"
         assert summary.did is None
 
@@ -188,37 +190,37 @@ class TestFeedback:
         assert feedback.capability == "tools"
 
 
-class TestSearchParams:
-    """Test SearchParams class."""
+class TestSearchFilters:
+    """Test SearchFilters dataclass."""
     
-    def test_search_params_creation(self):
-        """Test search params creation."""
-        params = SearchParams(
+    def test_search_filters_creation(self):
+        """Test search filter creation."""
+        params = SearchFilters(
             name="test",
-            mcp=True,
-            a2a=False,
+            hasMCP=True,
+            hasA2A=False,
             active=True,
             x402support=True
         )
         
         assert params.name == "test"
-        assert params.mcp is True
-        assert params.a2a is False
+        assert params.hasMCP is True
+        assert params.hasA2A is False
         assert params.active is True
         assert params.x402support is True
         assert params.chains is None
     
-    def test_search_params_to_dict(self):
+    def test_search_filters_to_dict(self):
         """Test conversion to dictionary."""
-        params = SearchParams(
+        params = SearchFilters(
             name="test",
-            mcp=True,
+            hasMCP=True,
             chains=[1, 8453]
         )
         
         data = params.to_dict()
         
         assert data["name"] == "test"
-        assert data["mcp"] is True
+        assert data["hasMCP"] is True
         assert data["chains"] == [1, 8453]
-        assert "a2a" not in data  # None values should be excluded
+        assert "hasA2A" not in data  # None values should be excluded

@@ -67,6 +67,12 @@ class SubgraphClient:
                 logger.debug("Subgraph schema missing agentWallet fields; retrying query without them")
                 q2 = query.replace("agentWalletChainId", "").replace("agentWallet", "")
                 return _do_query(q2)
+            # Some deployments do not yet expose `hasOASF` on AgentRegistrationFile.
+            if (("has no field" in msg and "hasOASF" in msg) or ("Cannot query field" in msg and "hasOASF" in msg)) and (
+                "hasOASF" in query
+            ):
+                logger.debug("Subgraph schema missing hasOASF; retrying query without it")
+                return _do_query(query.replace("hasOASF", "oasfEndpoint"))
             raise
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to query subgraph: {e}")
@@ -166,6 +172,181 @@ class SubgraphClient:
         
         result = self.query(query)
         return result.get('agents', [])
+
+    # -------------------------------------------------------------------------
+    # V2 query helpers (variable-based where clauses; used by unified search)
+    # -------------------------------------------------------------------------
+
+    def get_agents_v2(
+        self,
+        where: Optional[Dict[str, Any]],
+        first: int,
+        skip: int,
+        order_by: str,
+        order_direction: str,
+    ) -> List[Dict[str, Any]]:
+        query = """
+        query SearchAgentsV2($where: Agent_filter, $first: Int!, $skip: Int!, $orderBy: Agent_orderBy!, $orderDirection: OrderDirection!) {
+            agents(where: $where, first: $first, skip: $skip, orderBy: $orderBy, orderDirection: $orderDirection) {
+                id
+                chainId
+                agentId
+                agentURI
+                agentURIType
+                owner
+                operators
+                agentWallet
+                totalFeedback
+                createdAt
+                updatedAt
+                lastActivity
+                registrationFile {
+                    id
+                    agentId
+                    name
+                    description
+                    image
+                    active
+                    x402Support
+                    supportedTrusts
+                    mcpEndpoint
+                    mcpVersion
+                    a2aEndpoint
+                    a2aVersion
+                    webEndpoint
+                    emailEndpoint
+                    hasOASF
+                    oasfSkills
+                    oasfDomains
+                    ens
+                    did
+                    mcpTools
+                    mcpPrompts
+                    mcpResources
+                    a2aSkills
+                    createdAt
+                }
+            }
+        }
+        """
+        variables = {
+            "where": where,
+            "first": first,
+            "skip": skip,
+            "orderBy": order_by,
+            "orderDirection": order_direction,
+        }
+        try:
+            data = self.query(query, variables)
+            return data.get("agents", [])
+        except ValueError as e:
+            # Compatibility: some deployments do not support AgentRegistrationFile.hasOASF in the *filter input*.
+            # Retry by translating registrationFile_.hasOASF => oasfEndpoint existence checks.
+            msg = str(e)
+            if where and "hasOASF" in msg and ("AgentRegistrationFile" in msg or "AgentRegistrationFile_filter" in msg):
+                def rewrite(node: Any) -> Any:
+                    if isinstance(node, list):
+                        return [rewrite(x) for x in node]
+                    if not isinstance(node, dict):
+                        return node
+                    out: Dict[str, Any] = {}
+                    for k, v in node.items():
+                        if k == "registrationFile_" and isinstance(v, dict):
+                            rf = dict(v)
+                            if "hasOASF" in rf:
+                                want = bool(rf.get("hasOASF"))
+                                rf.pop("hasOASF", None)
+                                if want:
+                                    rf["oasfEndpoint_not"] = None
+                                else:
+                                    rf["oasfEndpoint"] = None
+                            out[k] = rewrite(rf)
+                        else:
+                            out[k] = rewrite(v)
+                    return out
+
+                variables2 = dict(variables)
+                variables2["where"] = rewrite(where)
+                data2 = self.query(query, variables2)
+                return data2.get("agents", [])
+            raise
+
+    def query_agent_metadatas(self, where: Dict[str, Any], first: int, skip: int) -> List[Dict[str, Any]]:
+        query = """
+        query AgentMetadatas($where: AgentMetadata_filter, $first: Int!, $skip: Int!) {
+            agentMetadatas(where: $where, first: $first, skip: $skip) {
+                id
+                key
+                value
+                updatedAt
+                agent { id }
+            }
+        }
+        """
+        try:
+            data = self.query(query, {"where": where, "first": first, "skip": skip})
+            return data.get("agentMetadatas", [])
+        except ValueError as e:
+            # Hosted subgraph compatibility: some deployments expose AgentMetadata list as `agentMetadata_collection`.
+            msg = str(e)
+            if ("has no field" in msg and "agentMetadatas" in msg) or ("Cannot query field" in msg and "agentMetadatas" in msg):
+                query2 = """
+                query AgentMetadataCollection($where: AgentMetadata_filter, $first: Int!, $skip: Int!) {
+                    agentMetadata_collection(where: $where, first: $first, skip: $skip) {
+                        id
+                        key
+                        value
+                        updatedAt
+                        agent { id }
+                    }
+                }
+                """
+                data2 = self.query(query2, {"where": where, "first": first, "skip": skip})
+                return data2.get("agentMetadata_collection", [])
+            raise
+
+    def query_feedbacks_minimal(
+        self,
+        where: Dict[str, Any],
+        first: int,
+        skip: int,
+        order_by: str = "createdAt",
+        order_direction: str = "desc",
+    ) -> List[Dict[str, Any]]:
+        query = """
+        query Feedbacks($where: Feedback_filter, $first: Int!, $skip: Int!, $orderBy: Feedback_orderBy!, $orderDirection: OrderDirection!) {
+            feedbacks(where: $where, first: $first, skip: $skip, orderBy: $orderBy, orderDirection: $orderDirection) {
+                id
+                agent { id }
+                clientAddress
+                value
+                tag1
+                tag2
+                endpoint
+                isRevoked
+                createdAt
+                responses(first: 1) { id }
+            }
+        }
+        """
+        data = self.query(
+            query,
+            {"where": where, "first": first, "skip": skip, "orderBy": order_by, "orderDirection": order_direction},
+        )
+        return data.get("feedbacks", [])
+
+    def query_feedback_responses(self, where: Dict[str, Any], first: int, skip: int) -> List[Dict[str, Any]]:
+        query = """
+        query FeedbackResponses($where: FeedbackResponse_filter, $first: Int!, $skip: Int!) {
+            feedbackResponses(where: $where, first: $first, skip: $skip) {
+                id
+                feedback { id }
+                createdAt
+            }
+        }
+        """
+        data = self.query(query, {"where": where, "first": first, "skip": skip})
+        return data.get("feedbackResponses", [])
 
     def get_agent_by_id(self, agent_id: str, include_registration_file: bool = True) -> Optional[Dict[str, Any]]:
         """
@@ -612,242 +793,4 @@ class SubgraphClient:
         result = self.query(query)
         return result.get('feedbacks', [])
     
-    def search_agents_by_reputation(
-        self,
-        agents: Optional[List[str]] = None,
-        tags: Optional[List[str]] = None,
-        reviewers: Optional[List[str]] = None,
-        capabilities: Optional[List[str]] = None,
-        skills: Optional[List[str]] = None,
-        tasks: Optional[List[str]] = None,
-        names: Optional[List[str]] = None,
-        minAverageValue: Optional[float] = None,
-        includeRevoked: bool = False,
-        first: int = 100,
-        skip: int = 0,
-        order_by: str = "createdAt",
-        order_direction: str = "desc",
-    ) -> List[Dict[str, Any]]:
-        """
-        Search agents filtered by reputation criteria.
-        
-        Args:
-            agents: List of agent IDs to filter by
-            tags: List of tags to filter feedback by
-            reviewers: List of reviewer addresses to filter feedback by
-            capabilities: List of capabilities to filter feedback by
-            skills: List of skills to filter feedback by
-            tasks: List of tasks to filter feedback by
-            minAverageValue: Minimum average value for included agents
-            includeRevoked: Whether to include revoked feedback in calculations
-            first: Number of results to return
-            skip: Number of results to skip
-            order_by: Field to order by
-            order_direction: Sort direction (asc/desc)
-            
-        Returns:
-            List of agents with averageValue field calculated from filtered feedback
-        """
-        # Build feedback filter
-        feedback_filters = []
-        
-        if not includeRevoked:
-            feedback_filters.append('isRevoked: false')
-        
-        if tags is not None and len(tags) > 0:
-            # Tags are now stored as human-readable strings in the subgraph
-            tag_filter = []
-            for tag in tags:
-                tag_filter.append(f'{{or: [{{tag1: "{tag}"}}, {{tag2: "{tag}"}}]}}')
-            feedback_filters.append(f'or: [{", ".join(tag_filter)}]')
-        
-        if reviewers is not None and len(reviewers) > 0:
-            reviewers_list = [f'"{addr}"' for addr in reviewers]
-            feedback_filters.append(f'clientAddress_in: [{", ".join(reviewers_list)}]')
-        
-        # Feedback file filters
-        feedback_file_filters = []
-        
-        if capabilities is not None and len(capabilities) > 0:
-            capabilities_list = [f'"{cap}"' for cap in capabilities]
-            feedback_file_filters.append(f'capability_in: [{", ".join(capabilities_list)}]')
-        
-        if skills is not None and len(skills) > 0:
-            skills_list = [f'"{skill}"' for skill in skills]
-            feedback_file_filters.append(f'skill_in: [{", ".join(skills_list)}]')
-        
-        if tasks is not None and len(tasks) > 0:
-            tasks_list = [f'"{task}"' for task in tasks]
-            feedback_file_filters.append(f'task_in: [{", ".join(tasks_list)}]')
-        
-        if names is not None and len(names) > 0:
-            names_list = [f'"{name}"' for name in names]
-            feedback_file_filters.append(f'name_in: [{", ".join(names_list)}]')
-        
-        if feedback_file_filters:
-            feedback_filters.append(f'feedbackFile_: {{ {", ".join(feedback_file_filters)} }}')
-        
-        # If we have feedback filters (tags, capabilities, skills, etc.), we need to first
-        # query feedback to get agent IDs, then query those agents
-        # Otherwise, query agents directly
-        if tags or capabilities or skills or tasks or names or reviewers:
-            # First, query feedback to get unique agent IDs that have matching feedback
-            feedback_where = f"{{ {', '.join(feedback_filters)} }}" if feedback_filters else "{}"
-            
-            feedback_query = f"""
-            {{
-                feedbacks(
-                    where: {feedback_where}
-                    first: 1000
-                    skip: 0
-                ) {{
-                    agent {{
-                        id
-                    }}
-                }}
-            }}
-            """
-            
-            try:
-                feedback_result = self.query(feedback_query)
-                feedbacks_data = feedback_result.get('feedbacks', [])
-                
-                # Extract unique agent IDs
-                agent_ids_set = set()
-                for fb in feedbacks_data:
-                    agent = fb.get('agent', {})
-                    agent_id = agent.get('id')
-                    if agent_id:
-                        agent_ids_set.add(agent_id)
-                
-                if not agent_ids_set:
-                    # No agents have matching feedback
-                    return []
-                
-                # Now query only those agents
-                agent_ids_list = list(agent_ids_set)
-                # Apply any agent filters if specified
-                if agents is not None and len(agents) > 0:
-                    agent_ids_list = [aid for aid in agent_ids_list if aid in agents]
-                    if not agent_ids_list:
-                        return []
-                
-                # Query agents (limit to first N based on pagination)
-                agent_ids_str = ', '.join([f'"{aid}"' for aid in agent_ids_list])
-                agent_where = f"where: {{ id_in: [{agent_ids_str}] }}"
-            except Exception as e:
-                logger.warning(f"Failed to query feedback for agent IDs: {e}")
-                return []
-        else:
-            # No feedback filters - query agents directly
-            # For reputation search, we want agents that have feedback
-            # Filter by totalFeedback > 0 to only get agents with feedback
-            agent_filters = ['totalFeedback_gt: 0']  # Only agents with feedback (BigInt comparison)
-            if agents is not None and len(agents) > 0:
-                agent_ids = [f'"{aid}"' for aid in agents]
-                agent_filters.append(f'id_in: [{", ".join(agent_ids)}]')
-            
-            agent_where = f"where: {{ {', '.join(agent_filters)} }}"
-        
-        # Build feedback where for agent query (to calculate scores)
-        feedback_where_for_agents = f"{{ {', '.join(feedback_filters)} }}" if feedback_filters else "{}"
-        
-        query = f"""
-        {{
-            agents(
-                {agent_where}
-                first: {first}
-                skip: {skip}
-                orderBy: {order_by}
-                orderDirection: {order_direction}
-            ) {{
-                id
-                chainId
-                agentId
-                agentURI
-                agentURIType
-                owner
-                operators
-                createdAt
-                updatedAt
-                totalFeedback
-                lastActivity
-                registrationFile {{
-                    id
-                    name
-                    description
-                    image
-                    active
-                    x402Support
-                    supportedTrusts
-                    mcpEndpoint
-                    mcpVersion
-                    a2aEndpoint
-                    a2aVersion
-                    ens
-                    did
-                    agentWallet
-                    agentWalletChainId
-                    mcpTools
-                    mcpPrompts
-                    mcpResources
-                    a2aSkills
-                    createdAt
-                }}
-                feedback(where: {feedback_where_for_agents}) {{
-                    value
-                    isRevoked
-                    feedbackFile {{
-                        capability
-                        skill
-                        task
-                        name
-                    }}
-                }}
-            }}
-        }}
-        """
-        
-        try:
-            result = self.query(query)
-            
-            # Check for GraphQL errors
-            if 'errors' in result:
-                logger.error(f"GraphQL errors in search_agents_by_reputation: {result['errors']}")
-                return []
-            
-            agents_result = result.get('agents', [])
-            
-            # Calculate average values
-            for agent in agents_result:
-                feedbacks = agent.get('feedback', [])
-                if feedbacks:
-                    values = [float(fb["value"]) for fb in feedbacks if fb.get("value") is not None]
-                    agent["averageValue"] = (sum(values) / len(values)) if values else None
-                else:
-                    agent["averageValue"] = None
-            
-            # Filter by minAverageValue
-            if minAverageValue is not None:
-                agents_result = [
-                    agent for agent in agents_result
-                    if agent.get("averageValue") is not None and agent["averageValue"] >= minAverageValue
-                ]
-            
-            # For reputation search, filter logic:
-            # - If specific agents were requested, return them even if averageValue is None
-            #   (the user explicitly asked for these agents, so return them)
-            # - If general search (no specific agents), only return agents with reputation data
-            if agents is None or len(agents) == 0:
-                # General search - only return agents with reputation
-                agents_result = [
-                    agent for agent in agents_result
-                    if agent.get("averageValue") is not None
-                ]
-            # else: specific agents requested - return all requested agents (even if averageValue is None)
-            
-            return agents_result
-            
-        except Exception as e:
-            logger.warning(f"Subgraph reputation search failed: {e}")
-            return []
+    # NOTE: `search_agents_by_reputation` was removed in favor of unified `SDK.searchAgents()` with `filters.feedback`.

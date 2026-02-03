@@ -16,7 +16,9 @@ from .core.models import (
     RegistrationFile,
     AgentSummary,
     Feedback,
-    SearchParams,
+    SearchFilters,
+    SearchOptions,
+    FeedbackFilters,
     SearchFeedbackParams,
 )
 
@@ -33,7 +35,7 @@ except ImportError:
     TransactionMined = None
     _sdk_available = False
 
-__version__ = "1.4.2"
+__version__ = "1.5.0b1"
 __all__ = [
     "SDK",
     "Agent",
@@ -52,6 +54,8 @@ __all__ = [
     "RegistrationFile",
     "AgentSummary",
     "Feedback",
-    "SearchParams",
+    "SearchFilters",
+    "SearchOptions",
+    "FeedbackFilters",
     "SearchFeedbackParams",
 ]

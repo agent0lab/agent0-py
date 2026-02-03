@@ -34,6 +34,12 @@ Agent0 SDK enables you to:
 pip install agent0-sdk
 ```
 
+To install the **1.5.0 pre-release** explicitly:
+
+```bash
+pip install --pre agent0-sdk==1.5.0b1
+```
+
 ### Install from Source
 
 ```bash
@@ -128,11 +134,15 @@ print(f"Updated: {update.agentURI}")
 ```python
 # Search by name, capabilities, or attributes
 results = sdk.searchAgents(
-    name="AI",  # Substring search
-    mcpTools=["code_generation"],  # Specific MCP tools
-    a2aSkills=["python"],  # Specific A2A skills
-    active=True,  # Only active agents
-    x402support=True  # Payment support
+    filters={
+        "name": "AI",  # substring
+        "mcpTools": ["code_generation"],
+        "a2aSkills": ["python"],
+        "active": True,
+        "x402support": True,
+        "feedback": {"minValue": 80, "tag": "enterprise", "includeRevoked": False},
+    },
+    options={"pageSize": 20, "sort": ["updatedAt:desc"]},
 )
 
 for agent in results['items']:
