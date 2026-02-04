@@ -497,13 +497,28 @@ class AgentIndexer:
         return field, direction
 
     def _resolve_chains(self, filters: SearchFilters, keyword_present: bool) -> List[int]:
+        # If the caller supplied a chain filter, use it exactly (aside from de-duplication).
         if filters.chains == "all":
             return self._get_all_configured_chains()
         if isinstance(filters.chains, list) and len(filters.chains) > 0:
-            return filters.chains
-        if keyword_present:
-            return self._get_all_configured_chains()
-        return [self.web3_client.chain_id]
+            out: List[int] = []
+            for c in filters.chains:
+                try:
+                    cid = int(c)
+                except Exception:
+                    continue
+                if cid not in out:
+                    out.append(cid)
+            return out
+
+        # Default behavior (keyword or not): query chain 1 + the SDK-initialized chainId.
+        # Avoid looking into chain 1 twice if SDK is initialized with chainId=1.
+        default_chains = [1, int(self.web3_client.chain_id)]
+        out: List[int] = []
+        for cid in default_chains:
+            if cid not in out:
+                out.append(cid)
+        return out
 
     # Pagination removed: cursor helpers deleted.
 
@@ -1303,18 +1318,16 @@ class AgentIndexer:
         subgraph_client: Optional[Any] = None,
     ) -> List[Feedback]:
         """Search feedback using subgraph."""
-        # Use provided client or default
         client = subgraph_client or self.subgraph_client
         if not client:
             return []
-        
+
         merged_agents: Optional[List[AgentId]] = None
         if agents:
             merged_agents = list(agents)
         if agentId:
             merged_agents = (merged_agents or []) + [agentId]
 
-        # Create SearchFeedbackParams
         params = SearchFeedbackParams(
             agents=merged_agents,
             reviewers=clientAddresses,
@@ -1325,10 +1338,10 @@ class AgentIndexer:
             names=names,
             minValue=minValue,
             maxValue=maxValue,
-            includeRevoked=include_revoked
+            includeRevoked=include_revoked,
         )
-        
-        feedbacks = []
+
+        feedbacks: List[Feedback] = []
         batch = 1000
         skip = 0
         while True:
@@ -1341,9 +1354,8 @@ class AgentIndexer:
             )
 
             for fb_data in feedbacks_data:
-                # Parse agentId from feedback ID
-                feedback_id = fb_data['id']
-                parts = feedback_id.split(':')
+                feedback_id = fb_data["id"]
+                parts = feedback_id.split(":")
                 if len(parts) >= 2:
                     agent_id_str = f"{parts[0]}:{parts[1]}"
                     client_addr = parts[2] if len(parts) > 2 else ""
@@ -1361,9 +1373,9 @@ class AgentIndexer:
             if len(feedbacks_data) < batch:
                 break
             skip += batch
-        
+
         return feedbacks
-    
+
     def _hexBytes32ToTags(self, tag1: str, tag2: str) -> List[str]:
         """Convert hex bytes32 tags back to strings, or return plain strings as-is.
         

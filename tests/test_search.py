@@ -81,13 +81,14 @@ def main():
     print("-" * 60)
     try:
         results = sdk.searchAgents(name="Test")
-        agents = results.get('items', [])
+        agents = results
         print(f"✅ Found {len(agents)} agent(s) with name matching 'Test'")
         for i, agent in enumerate(agents[:3], 1):
+            agent = agent if isinstance(agent, dict) else agent.__dict__
             agent_id = agent.get('agentId', agent.get('id', 'N/A'))
-            print(f"   {i}. {agent['name']} (ID: {agent_id})")
+            print(f"   {i}. {agent.get('name', 'N/A')} (ID: {agent_id})")
             if agent.get('description'):
-                print(f"      {agent['description'][:60]}...")
+                print(f"      {str(agent['description'])[:60]}...")
     except Exception as e:
         print(f"❌ Failed to search by name: {e}")
     
@@ -96,10 +97,11 @@ def main():
     try:
         # Using capabilities from test_feedback.py: data_analysis, code_generation, natural_language_understanding, problem_solving, communication
         results = sdk.searchAgents(mcpTools=["data_analysis"])
-        agents = results.get('items', [])
+        agents = results
         print(f"✅ Found {len(agents)} agent(s) with 'data_analysis' capability")
         for i, agent in enumerate(agents[:3], 1):
-            print(f"   {i}. {agent['name']}")
+            agent = agent if isinstance(agent, dict) else agent.__dict__
+            print(f"   {i}. {agent.get('name', 'N/A')}")
             if agent.get('mcpTools'):
                 print(f"      Tools: {', '.join(agent['mcpTools'][:3])}...")
     except Exception as e:
@@ -110,10 +112,11 @@ def main():
     try:
         # Using skills from test_feedback.py: python, javascript, machine_learning, web_development, cloud_computing
         results = sdk.searchAgents(a2aSkills=["javascript"])
-        agents = results.get('items', [])
+        agents = results
         print(f"✅ Found {len(agents)} agent(s) with 'javascript' skill")
         for i, agent in enumerate(agents[:3], 1):
-            print(f"   {i}. {agent['name']}")
+            agent = agent if isinstance(agent, dict) else agent.__dict__
+            print(f"   {i}. {agent.get('name', 'N/A')}")
             if agent.get('a2aSkills'):
                 print(f"      Skills: {', '.join(agent['a2aSkills'][:3])}...")
     except Exception as e:
@@ -123,10 +126,11 @@ def main():
     print("-" * 60)
     try:
         results = sdk.searchAgents(ensContains="test")
-        agents = results.get('items', [])
+        agents = results
         print(f"✅ Found {len(agents)} agent(s) with ENS matching 'test'")
         for i, agent in enumerate(agents[:3], 1):
-            print(f"   {i}. {agent['name']}")
+            agent = agent if isinstance(agent, dict) else agent.__dict__
+            print(f"   {i}. {agent.get('name', 'N/A')}")
             if agent.get('ens'):
                 print(f"      ENS: {agent['ens']}")
     except Exception as e:
@@ -135,11 +139,12 @@ def main():
     print(f"\n📍 Step 6: Search Only Active Agents")
     print("-" * 60)
     try:
-        results = sdk.searchAgents(active=True, page_size=10)
-        agents = results.get('items', [])
+        results = sdk.searchAgents(active=True)
+        agents = results
         print(f"✅ Found {len(agents)} active agent(s)")
         for i, agent in enumerate(agents[:3], 1):
-            print(f"   {i}. {agent['name']} - {agent.get('totalFeedback', 0)} feedback")
+            agent = agent if isinstance(agent, dict) else agent.__dict__
+            print(f"   {i}. {agent.get('name', 'N/A')} - {agent.get('feedbackCount', 0)} feedback")
     except Exception as e:
         print(f"❌ Failed to search active agents: {e}")
     
@@ -153,10 +158,11 @@ def main():
             mcpTools=["communication"],
             a2aSkills=["python"]
         )
-        agents = results.get('items', [])
+        agents = results
         print(f"✅ Found {len(agents)} agent(s) with 'communication' capability AND 'python' skill")
         for i, agent in enumerate(agents[:3], 1):
-            print(f"   {i}. {agent['name']}")
+            agent = agent if isinstance(agent, dict) else agent.__dict__
+            print(f"   {i}. {agent.get('name', 'N/A')}")
     except Exception as e:
         print(f"❌ Failed to search with multiple filters: {e}")
     
@@ -164,7 +170,7 @@ def main():
     print("-" * 60)
     try:
         results = sdk.searchAgents(feedback={"minValue": 80})
-        agents = results.get('items', [])
+        agents = results
         print(f"✅ Found {len(agents)} agent(s) with average value >= 80")
         for i, agent in enumerate(agents[:3], 1):
             # AgentSummary object - use attributes, not dict.get()
@@ -182,7 +188,7 @@ def main():
         # Note: GraphQL query has known issue with mixing filters, so using includeRevoked=True as workaround
         # which may affect results, but at least the query will execute
         results = sdk.searchAgents(feedback={"tag": "enterprise", "includeRevoked": True})
-        agents = results.get('items', [])
+        agents = results
         print(f"✅ Found {len(agents)} agent(s) with 'enterprise' tag")
         for i, agent in enumerate(agents[:3], 1):
             avg_value = agent.averageValue if getattr(agent, "averageValue", None) is not None else 'N/A'
@@ -197,7 +203,7 @@ def main():
         # Capability filtering via off-chain feedback file fields is not supported in unified search;
         # demonstrate feedback.hasResponse instead.
         results = sdk.searchAgents(feedback={"hasResponse": True})
-        agents = results.get('items', [])
+        agents = results
         print(f"✅ Found {len(agents)} agent(s) with feedback responses")
         for i, agent in enumerate(agents[:3], 1):
             avg_value = agent.averageValue if getattr(agent, "averageValue", None) is not None else 'N/A'
@@ -211,7 +217,7 @@ def main():
     try:
         # Using skills that actually exist in feedback: python, machine_learning, cloud_computing, web_development
         results = sdk.searchAgents(feedback={"tag": "python"})
-        agents = results.get('items', [])
+        agents = results
         print(f"✅ Found {len(agents)} agent(s) with 'python' skill")
         for i, agent in enumerate(agents[:3], 1):
             avg_value = agent.averageValue if getattr(agent, "averageValue", None) is not None else 'N/A'
@@ -225,40 +231,43 @@ def main():
     print(f"\n📍 Step 12: Advanced - Complex Multi-Criteria Search")
     print("-" * 60)
     try:
-        results = sdk.searchAgents(name="Test", active=True, page_size=10)
-        agents = results.get('items', [])
+        results = sdk.searchAgents(name="Test", active=True)
+        agents = results
         print(f"✅ Found {len(agents)} agent(s) matching multiple criteria")
         for i, agent in enumerate(agents[:3], 1):
-            print(f"   {i}. {agent['name']}")
-            print(f"      Active: {agent.get('active', False)}, Feedback: {agent.get('totalFeedback', 0)}")
+            agent = agent if isinstance(agent, dict) else agent.__dict__
+            print(f"   {i}. {agent.get('name', 'N/A')}")
+            print(f"      Active: {agent.get('active', False)}, Feedback: {agent.get('feedbackCount', 0)}")
             if agent.get('ens'):
                 print(f"      ENS: {agent['ens']}")
     except Exception as e:
         print(f"❌ Failed complex search: {e}")
     
-    print(f"\n📍 Step 13: Pagination Test (First 5 Agents)")
+    print(f"\n📍 Step 13: First 5 Agents (Pagination Removed)")
     print("-" * 60)
     try:
-        results = sdk.searchAgents(page_size=5)
-        agents = results.get('items', [])
+        results = sdk.searchAgents()
+        agents = results[:5]
         print(f"✅ Retrieved first page: {len(agents)} agent(s)")
         for i, agent in enumerate(agents, 1):
+            agent = agent if isinstance(agent, dict) else agent.__dict__
             agent_id = agent.get('agentId', agent.get('id', 'N/A'))
-            print(f"   {i}. {agent['name']} (ID: {agent_id})")
+            print(f"   {i}. {agent.get('name', 'N/A')} (ID: {agent_id})")
     except Exception as e:
         print(f"❌ Failed pagination test: {e}")
     
     print(f"\n📍 Step 14: Sort by Activity (Most Recent)")
     print("-" * 60)
     try:
-        results = sdk.searchAgents(page_size=10, sort=["updatedAt:desc"])
-        agents = results.get('items', [])
+        results = sdk.searchAgents(filters={}, options={"sort": ["updatedAt:desc"]})
+        agents = results[:10]
         if agents:
             print(f"✅ Retrieved {len(agents)} agents")
             print(f"   Most recent activity IDs:")
             for i, agent in enumerate(agents[:5], 1):
+                agent = agent if isinstance(agent, dict) else agent.__dict__
                 agent_id = agent.get('agentId', agent.get('id', 'N/A'))
-                print(f"   {i}. ID {agent_id}: {agent['name']}")
+                print(f"   {i}. ID {agent_id}: {agent.get('name', 'N/A')}")
     except Exception as e:
         print(f"❌ Failed activity sort: {e}")
 
@@ -267,18 +276,21 @@ def main():
     try:
         # First, get an agent to extract its owner address for testing
         test_agent = sdk.getAgent(AGENT_ID)
-        if hasattr(test_agent, 'owner') and test_agent.owner:
-            owner_address = test_agent.owner
+        if hasattr(test_agent, 'owners') and test_agent.owners:
+            owner_address = test_agent.owners[0]
             print(f"   Testing with owner address: {owner_address}")
 
             results = sdk.searchAgents(owners=[owner_address])
-            agents = results.get('items', [])
+            agents = results
             print(f"✅ Found {len(agents)} agent(s) owned by {owner_address[:10]}...{owner_address[-8:]}")
 
             for i, agent in enumerate(agents[:3], 1):
+                agent = agent if isinstance(agent, dict) else agent.__dict__
                 agent_id = agent.get('agentId', agent.get('id', 'N/A'))
-                agent_owner = agent.get('owner', 'N/A')
-                print(f"   {i}. {agent['name']} (ID: {agent_id})")
+                owners = agent.get('owners') or []
+                agent_owner = owners[0] if isinstance(owners, list) and owners else 'N/A'
+                print(f"   {i}. {agent.get('name', 'N/A')} (ID: {agent_id})")
+                if isinstance(agent_owner, str):
                 print(f"      Owner: {agent_owner[:10]}...{agent_owner[-8:] if len(agent_owner) > 18 else agent_owner}")
         else:
             print("⚠️  Test agent doesn't have owner information")
@@ -289,26 +301,33 @@ def main():
     print("-" * 60)
     try:
         # Get multiple agents to collect different owner addresses
-        results = sdk.searchAgents(page_size=5)
-        agents = results.get('items', [])
+        results = sdk.searchAgents()
+        agents = [a if isinstance(a, dict) else a.__dict__ for a in results[:10]]
         owner_addresses = []
 
         for agent in agents:
-            if agent.get('owner') and agent['owner'] not in owner_addresses:
-                owner_addresses.append(agent['owner'])
+            owners = agent.get('owners') or []
+            owner = owners[0] if isinstance(owners, list) and owners else None
+            if owner and owner not in owner_addresses:
+                owner_addresses.append(owner)
                 if len(owner_addresses) >= 2:
                     break
 
         if len(owner_addresses) >= 2:
             print(f"   Testing with {len(owner_addresses)} owner addresses")
             results = sdk.searchAgents(owners=owner_addresses)
-            agents = results.get('items', [])
+            agents = [a if isinstance(a, dict) else a.__dict__ for a in results]
             print(f"✅ Found {len(agents)} agent(s) owned by multiple addresses")
 
             for i, agent in enumerate(agents[:5], 1):
                 agent_id = agent.get('agentId', agent.get('id', 'N/A'))
-                agent_owner = agent.get('owner', 'N/A')
-                print(f"   {i}. {agent['name']} (Owner: {agent_owner[:10]}...{agent_owner[-8:] if len(agent_owner) > 18 else agent_owner})")
+                owners = agent.get('owners') or []
+                agent_owner = owners[0] if isinstance(owners, list) and owners else 'N/A'
+                name = agent.get('name', 'N/A')
+                if isinstance(agent_owner, str):
+                    print(f"   {i}. {name} (Owner: {agent_owner[:10]}...{agent_owner[-8:] if len(agent_owner) > 18 else agent_owner})")
+                else:
+                    print(f"   {i}. {name} (Owner: N/A)")
         else:
             print("⚠️  Not enough different owners found for multi-owner test")
     except Exception as e:
@@ -318,8 +337,8 @@ def main():
     print("-" * 60)
     try:
         # First check if any agents have operators defined
-        results = sdk.searchAgents(page_size=10)
-        agents = results.get('items', [])
+        results = sdk.searchAgents()
+        agents = [a if isinstance(a, dict) else a.__dict__ for a in results[:25]]
         test_operators = []
 
         for agent in agents:
@@ -330,13 +349,13 @@ def main():
 
         if test_operators:
             results = sdk.searchAgents(operators=test_operators)
-            found_agents = results.get('items', [])
+            found_agents = [a if isinstance(a, dict) else a.__dict__ for a in results]
             print(f"✅ Found {len(found_agents)} agent(s) with specified operator")
 
             for i, agent in enumerate(found_agents[:3], 1):
                 agent_id = agent.get('agentId', agent.get('id', 'N/A'))
                 agent_operators = agent.get('operators', [])
-                print(f"   {i}. {agent['name']} (ID: {agent_id})")
+                print(f"   {i}. {agent.get('name', 'N/A')} (ID: {agent_id})")
                 if agent_operators:
                     print(f"      Operators: {len(agent_operators)} total")
         else:
@@ -348,21 +367,26 @@ def main():
     print("-" * 60)
     try:
         # Get an owner address from an active agent
-        results = sdk.searchAgents(active=True, page_size=5)
-        agents = results.get('items', [])
+        results = sdk.searchAgents(active=True)
+        agents = [a if isinstance(a, dict) else a.__dict__ for a in results[:10]]
 
-        if agents and agents[0].get('owner'):
-            test_owner = agents[0]['owner']
+        first_owners = (agents[0].get('owners') or []) if agents else []
+        test_owner = first_owners[0] if isinstance(first_owners, list) and first_owners else None
+        if test_owner:
             print(f"   Testing owner {test_owner[:10]}...{test_owner[-8:]} + active=True")
 
             results = sdk.searchAgents(owners=[test_owner], active=True)
-            found_agents = results.get('items', [])
+            found_agents = [a if isinstance(a, dict) else a.__dict__ for a in results]
             print(f"✅ Found {len(found_agents)} active agent(s) owned by specified address")
 
             for i, agent in enumerate(found_agents[:3], 1):
                 agent_id = agent.get('agentId', agent.get('id', 'N/A'))
-                print(f"   {i}. {agent['name']} (ID: {agent_id})")
-                print(f"      Active: {agent.get('active', False)}, Owner: {agent.get('owner', 'N/A')[:10]}...")
+                name = agent.get('name', 'N/A')
+                owners = agent.get('owners') or []
+                owner0 = owners[0] if isinstance(owners, list) and owners else 'N/A'
+                print(f"   {i}. {name} (ID: {agent_id})")
+                if isinstance(owner0, str):
+                    print(f"      Active: {agent.get('active', False)}, Owner: {owner0[:10]}...")
         else:
             print("⚠️  No active agents with owner information found")
     except Exception as e:
@@ -372,28 +396,34 @@ def main():
     print("-" * 60)
     try:
         # Get agents and find one with both name and owner
-        results = sdk.searchAgents(page_size=10)
-        agents = results.get('items', [])
+        results = sdk.searchAgents()
+        agents = [a if isinstance(a, dict) else a.__dict__ for a in results[:25]]
 
         test_agent = None
         for agent in agents:
-            if agent.get('owner') and agent.get('name'):
+            owners = agent.get('owners') or []
+            owner0 = owners[0] if isinstance(owners, list) and owners else None
+            if owner0 and agent.get('name'):
                 test_agent = agent
                 break
 
         if test_agent:
-            test_owner = test_agent['owner']
+            owners = test_agent.get('owners') or []
+            test_owner = owners[0] if isinstance(owners, list) and owners else None
+            if not test_owner:
+                print("⚠️  No suitable test agent found")
+                return
             # Use partial name for search
             name_part = test_agent['name'][:4] if len(test_agent['name']) > 4 else test_agent['name']
             print(f"   Testing owner filter + name contains '{name_part}'")
 
             results = sdk.searchAgents(owners=[test_owner], name=name_part)
-            found_agents = results.get('items', [])
+            found_agents = [a if isinstance(a, dict) else a.__dict__ for a in results]
             print(f"✅ Found {len(found_agents)} agent(s) matching both criteria")
 
             for i, agent in enumerate(found_agents[:3], 1):
                 agent_id = agent.get('agentId', agent.get('id', 'N/A'))
-                print(f"   {i}. {agent['name']} (ID: {agent_id})")
+                print(f"   {i}. {agent.get('name', 'N/A')} (ID: {agent_id})")
         else:
             print("⚠️  No suitable test agent found")
     except Exception as e:

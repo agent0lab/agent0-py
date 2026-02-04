@@ -65,7 +65,8 @@ def test_search_agents_fetches_all_pages(monkeypatch):
     # Avoid metadata/feedback prefilters for this test.
     monkeypatch.setattr(idx, "_prefilter_by_metadata", lambda filters, chains: None)
     monkeypatch.setattr(idx, "_prefilter_by_feedback", lambda filters, chains, candidate: (None, {}))
-    monkeypatch.setattr(idx, "_get_subgraph_client_for_chain", lambda chain_id: stub)
+    # Default chain resolution queries chain 1 + the SDK chain; only the SDK chain is configured in this stub.
+    monkeypatch.setattr(idx, "_get_subgraph_client_for_chain", lambda chain_id: stub if chain_id == 11155111 else None)
 
     results = idx.search_agents(SearchFilters(), SearchOptions(sort=["updatedAt:desc"]))
 

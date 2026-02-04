@@ -35,7 +35,7 @@ except ImportError:
     TransactionMined = None
     _sdk_available = False
 
-__version__ = "1.5.1b1"
+__version__ = "1.5.2"
 __all__ = [
     "SDK",
     "Agent",

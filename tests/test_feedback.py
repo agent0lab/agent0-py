@@ -438,9 +438,8 @@ def main():
     try:
         other_agent_id = None
         try:
-            page = agentSdk.searchAgents(page_size=5)
-            items = page.get("items", [])
-            for item in items:
+            results = agentSdk.searchAgents()
+            for item in results[:5]:
                 candidate = item.get("agentId") if isinstance(item, dict) else getattr(item, "agentId", None)
                 if candidate and candidate != AGENT_ID:
                     other_agent_id = candidate

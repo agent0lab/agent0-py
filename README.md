@@ -34,10 +34,10 @@ Agent0 SDK enables you to:
 pip install agent0-sdk
 ```
 
-To install the **1.5.1 pre-release** explicitly:
+To install a specific version explicitly:
 
 ```bash
-pip install --pre agent0-sdk==1.5.1b1
+pip install agent0-sdk==1.5.2
 ```
 
 ### Install from Source
