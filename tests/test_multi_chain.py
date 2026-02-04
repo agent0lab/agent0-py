@@ -31,8 +31,8 @@ from agent0_sdk import SDK, SearchFilters
 from tests.config import CHAIN_ID, RPC_URL, print_config
 
 
-def _search_agents(sdk: SDK, filters: SearchFilters, *, page_size: int = 50, sort: list[str] | None = None, cursor: str | None = None):
-    return sdk.searchAgents(filters=filters, options={"pageSize": page_size, "sort": sort or [], "cursor": cursor})
+def _search_agents(sdk: SDK, filters: SearchFilters, *, sort: list[str] | None = None):
+    return sdk.searchAgents(filters=filters, options={"sort": sort or []})
 
 RUN_LIVE_TESTS = os.getenv("RUN_LIVE_TESTS", "0") != "0"
 # Supported chains for multi-chain testing
@@ -76,10 +76,10 @@ def main():
             # First, search for agents on this chain to get a real agent ID
             params = SearchFilters()
             params.chains = [chain_id]
-            search_result = _search_agents(sdk, params, page_size=1, sort=[])
+            search_result = _search_agents(sdk, params, sort=[])
             
-            if search_result.get('items') and len(search_result['items']) > 0:
-                agent_summary = search_result['items'][0]
+            if search_result and len(search_result) > 0:
+                agent_summary = search_result[0]
                 # Handle both dict and AgentSummary object
                 agent_id = agent_summary.get('agentId') if isinstance(agent_summary, dict) else agent_summary.agentId
                 
@@ -108,10 +108,10 @@ def main():
         # Test with just agentId (uses SDK's default chain)
         params = SearchFilters()
         params.chains = [CHAIN_ID]
-        search_result = _search_agents(sdk, params, page_size=1, sort=[])
+        search_result = _search_agents(sdk, params, sort=[])
         
-        if search_result.get('items') and len(search_result['items']) > 0:
-            agent_item = search_result['items'][0]
+        if search_result and len(search_result) > 0:
+            agent_item = search_result[0]
             # Handle both dict and AgentSummary object
             agent_id = agent_item.get('agentId') if isinstance(agent_item, dict) else agent_item.agentId
             # Remove chainId prefix if present
@@ -143,10 +143,10 @@ def main():
                 # Fallback: search for any agent
                 params = SearchFilters()
                 params.chains = [chain_id]
-                search_result = _search_agents(sdk, params, page_size=1, sort=[])
+                search_result = _search_agents(sdk, params, sort=[])
                 
-                if search_result.get('items') and len(search_result['items']) > 0:
-                    agent_summary = search_result['items'][0]
+                if search_result and len(search_result) > 0:
+                    agent_summary = search_result[0]
                     # Handle both dict and AgentSummary object
                     agent_id = agent_summary.get('agentId') if isinstance(agent_summary, dict) else agent_summary.agentId
                     
@@ -191,10 +191,10 @@ def main():
             # Fallback: search for any agent
             params = SearchFilters()
             params.chains = [CHAIN_ID]
-            search_result = _search_agents(sdk, params, page_size=1, sort=[])
+            search_result = _search_agents(sdk, params, sort=[])
             
-            if search_result.get('items') and len(search_result['items']) > 0:
-                agent_item = search_result['items'][0]
+            if search_result and len(search_result) > 0:
+                agent_item = search_result[0]
                 # Handle both dict and AgentSummary object
                 agent_id = agent_item.get('agentId') if isinstance(agent_item, dict) else agent_item.agentId
                 # Remove chainId prefix if present
@@ -242,9 +242,9 @@ def main():
                     # Now try unified search with feedback filters
                     result = sdk.searchAgents(
                         filters={"chains": [chain_id], "feedback": {"hasFeedback": True, "includeRevoked": False}},
-                        options={"pageSize": 10},
+                        options={"sort": []},
                     )
-                    agents = result.get('items', [])
+                    agents = result
                     
                     if agents:
                         print(f"✅ Chain {chain_id}: Found {len(agents)} agents with feedback")
@@ -268,9 +268,9 @@ def main():
                 # For chains without reputation data, try general feedback search
                 result = sdk.searchAgents(
                     filters={"chains": [chain_id], "feedback": {"hasFeedback": True, "includeRevoked": False}},
-                    options={"pageSize": 10},
+                    options={"sort": []},
                 )
-                agents = result.get('items', [])
+                agents = result
                 if agents:
                     print(f"✅ Chain {chain_id}: Found {len(agents)} agents with feedback")
                 else:
@@ -299,13 +299,12 @@ def main():
             # Try unified search with feedback filters
             result = sdk.searchAgents(
                 filters={"chains": chains, "feedback": {"hasFeedback": True, "includeRevoked": False}},
-                options={"pageSize": 20},
+                options={"sort": []},
             )
             
-            agents = result.get('items', [])
-            meta = result.get('meta', {})
-            successful_chains = meta.get('successfulChains', [])
-            failed_chains = meta.get('failedChains', [])
+            agents = result
+            successful_chains = []
+            failed_chains = []
             
             chain_ids = set(agent.chainId for agent in agents)
             if agents:
@@ -343,19 +342,18 @@ def main():
             # Query for specific agents we know have reputation
             result = sdk.searchAgents(
                 filters={"agentIds": all_known_agents, "chains": "all", "feedback": {"hasFeedback": True, "includeRevoked": False}},
-                options={"pageSize": 20},
+                options={"sort": []},
             )
         else:
             # General search if no known agents
             result = sdk.searchAgents(
                 filters={"chains": "all", "feedback": {"hasFeedback": True, "includeRevoked": False}},
-                options={"pageSize": 20},
+                options={"sort": []},
             )
         
-        agents = result.get('items', [])
-        meta = result.get('meta', {})
-        successful_chains = meta.get('successfulChains', [])
-        failed_chains = meta.get('failedChains', [])
+        agents = result
+        successful_chains = []
+        failed_chains = []
         
         chain_ids = set(agent.chainId for agent in agents)
         if agents:
@@ -401,10 +399,10 @@ def main():
         # Test with chains that have reputation data (84532 has agents with averageValue)
         result = sdk.searchAgents(
             filters={"chains": [84532], "feedback": {"tag": TEST_TAGS[0], "includeRevoked": False}},
-            options={"pageSize": 20},
+            options={"sort": []},
         )
         
-        agents = result.get('items', [])
+        agents = result
         print(f"✅ Found {len(agents)} agents with filters")
         print(f"   Filter: feedback.tag={TEST_TAGS[0]}, chains=[84532]")
         if agents:
@@ -430,11 +428,11 @@ def main():
                 # Fallback: search for agents and try each one
                 params = SearchFilters()
                 params.chains = [chain_id]
-                search_result = _search_agents(sdk, params, page_size=10, sort=[])
+                search_result = _search_agents(sdk, params, sort=[])
                 
-                if search_result.get('items') and len(search_result['items']) > 0:
+                if search_result and len(search_result) > 0:
                     # Try to get reputation for each agent until we find one with feedback
-                    for agent_summary in search_result['items']:
+                    for agent_summary in search_result:
                         # Handle both dict and AgentSummary object
                         agent_id = agent_summary.get('agentId') if isinstance(agent_summary, dict) else agent_summary.agentId
                         if ':' in agent_id:
@@ -479,11 +477,11 @@ def main():
             # Fallback: search for agents and try each one
             params = SearchFilters()
             params.chains = [CHAIN_ID]
-            search_result = _search_agents(sdk, params, page_size=10, sort=[])
+            search_result = _search_agents(sdk, params, sort=[])
             
-            if search_result.get('items') and len(search_result['items']) > 0:
+            if search_result and len(search_result) > 0:
                 # Try to get reputation for each agent until we find one with feedback
-                for agent_summary in search_result['items']:
+                for agent_summary in search_result:
                     # Handle both dict and AgentSummary object
                     agent_id = agent_summary.get('agentId') if isinstance(agent_summary, dict) else agent_summary.agentId
                     if ':' in agent_id:
@@ -526,16 +524,16 @@ def main():
             # Query for specific agents we know have reputation
             result = sdk.searchAgents(
                 filters={"agentIds": all_known_agents, "chains": SUPPORTED_CHAINS, "feedback": {"hasFeedback": True, "includeRevoked": False}},
-                options={"pageSize": 20},
+                options={"sort": []},
             )
         else:
             # General search if no known agents
             result = sdk.searchAgents(
                 filters={"chains": SUPPORTED_CHAINS, "feedback": {"hasFeedback": True, "includeRevoked": False}},
-                options={"pageSize": 20},
+                options={"sort": []},
             )
         
-        agents = result.get('items', [])
+        agents = result
         chain_ids = set(agent.chainId for agent in agents)
         
         if agents:
@@ -604,6 +602,6 @@ def test_multi_chain_live():
     chains = list(DEFAULT_SUBGRAPH_URLS.keys())
     assert len(chains) > 0
 
-    r = sdk.searchAgents(filters={"chains": chains}, options={"pageSize": 5, "sort": []})
-    assert "items" in r
-    assert len(r["items"]) > 0
+    r = sdk.searchAgents(filters={"chains": chains}, options={"sort": []})
+    assert isinstance(r, list)
+    assert len(r) > 0

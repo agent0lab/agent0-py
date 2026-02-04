@@ -34,10 +34,10 @@ Agent0 SDK enables you to:
 pip install agent0-sdk
 ```
 
-To install the **1.5.0 pre-release** explicitly:
+To install the **1.5.1 pre-release** explicitly:
 
 ```bash
-pip install --pre agent0-sdk==1.5.0b1
+pip install --pre agent0-sdk==1.5.1b1
 ```
 
 ### Install from Source
@@ -142,10 +142,10 @@ results = sdk.searchAgents(
         "x402support": True,
         "feedback": {"minValue": 80, "tag": "enterprise", "includeRevoked": False},
     },
-    options={"pageSize": 20, "sort": ["updatedAt:desc"]},
+    options={"sort": ["updatedAt:desc"]},
 )
 
-for agent in results['items']:
+for agent in results:
     print(f"{agent.name}: {agent.description}")
     print(f"  Tools: {agent.mcpTools}")
     print(f"  Skills: {agent.a2aSkills}")
@@ -295,6 +295,151 @@ The SDK includes complete OASF v0.8.0 taxonomy files:
 
 Browse these files to find appropriate skill and domain slugs. For more information, see the [OASF specification](https://github.com/agntcy/oasf) and [Release Notes v0.31](RELEASE_NOTES_0.31.md).
 
+## Unified Search Reference (Exhaustive)
+
+The unified search API is:
+
+```python
+results = sdk.searchAgents(filters: dict | SearchFilters | None = None, options: dict | SearchOptions | None = None)
+# results: list[AgentSummary]
+```
+
+### `FeedbackFilters` (used as `filters["feedback"]`)
+
+```python
+@dataclass
+class FeedbackFilters:
+    hasFeedback: Optional[bool] = None
+    hasNoFeedback: Optional[bool] = None
+    includeRevoked: Optional[bool] = None
+    minValue: Optional[float] = None
+    maxValue: Optional[float] = None
+    minCount: Optional[int] = None
+    maxCount: Optional[int] = None
+    fromReviewers: Optional[List[Address]] = None
+    endpoint: Optional[str] = None          # substring match
+    hasResponse: Optional[bool] = None
+    tag1: Optional[str] = None
+    tag2: Optional[str] = None
+    tag: Optional[str] = None               # matches tag1 OR tag2
+```
+
+| Field | Semantics |
+| --- | --- |
+| `hasFeedback` / `hasNoFeedback` | Filter by whether the agent has any feedback |
+| `includeRevoked` | Include revoked feedback entries in the pool used for filtering |
+| `minValue` / `maxValue` | Threshold on **average value** over feedback matching the other feedback constraints (inclusive) |
+| `minCount` / `maxCount` | Threshold on **count** over feedback matching the other feedback constraints (inclusive) |
+| `fromReviewers` | Only consider feedback from these reviewer wallets |
+| `endpoint` | Only consider feedback whose `endpoint` contains this substring |
+| `hasResponse` | Only consider feedback that has at least one response (if supported) |
+| `tag1` / `tag2` | Only consider feedback matching tag1/tag2 |
+| `tag` | Shorthand: match either tag1 OR tag2 |
+
+### `SearchFilters`
+
+```python
+DateLike = Union[datetime, str, int]
+
+@dataclass
+class SearchFilters:
+    chains: Optional[Union[List[ChainId], Literal["all"]]] = None
+    agentIds: Optional[List[AgentId]] = None
+
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+    owners: Optional[List[Address]] = None
+    operators: Optional[List[Address]] = None
+
+    hasRegistrationFile: Optional[bool] = None
+    hasWeb: Optional[bool] = None
+    hasMCP: Optional[bool] = None
+    hasA2A: Optional[bool] = None
+    hasOASF: Optional[bool] = None
+    hasEndpoints: Optional[bool] = None
+
+    webContains: Optional[str] = None
+    mcpContains: Optional[str] = None
+    a2aContains: Optional[str] = None
+    ensContains: Optional[str] = None
+    didContains: Optional[str] = None
+
+    walletAddress: Optional[Address] = None
+
+    supportedTrust: Optional[List[str]] = None
+    a2aSkills: Optional[List[str]] = None
+    mcpTools: Optional[List[str]] = None
+    mcpPrompts: Optional[List[str]] = None
+    mcpResources: Optional[List[str]] = None
+    oasfSkills: Optional[List[str]] = None
+    oasfDomains: Optional[List[str]] = None
+
+    active: Optional[bool] = None
+    x402support: Optional[bool] = None
+
+    registeredAtFrom: Optional[DateLike] = None
+    registeredAtTo: Optional[DateLike] = None
+    updatedAtFrom: Optional[DateLike] = None
+    updatedAtTo: Optional[DateLike] = None
+
+    hasMetadataKey: Optional[str] = None
+    metadataValue: Optional[Dict[str, str]] = None  # { key, value }
+
+    keyword: Optional[str] = None
+    feedback: Optional[FeedbackFilters] = None
+```
+
+### `SearchOptions`
+
+```python
+@dataclass
+class SearchOptions:
+    sort: Optional[List[str]] = None
+    semanticMinScore: Optional[float] = None
+    semanticTopK: Optional[int] = None
+```
+
+### `AgentSummary` (returned items)
+
+```python
+@dataclass
+class AgentSummary:
+    chainId: ChainId
+    agentId: AgentId
+    name: str
+    image: Optional[URI]
+    description: str
+    owners: List[Address]
+    operators: List[Address]
+    # Endpoint strings (present when advertised; not booleans)
+    mcp: Optional[str] = None
+    a2a: Optional[str] = None
+    web: Optional[str] = None
+    email: Optional[str] = None
+    ens: Optional[str] = None
+    did: Optional[str] = None
+    walletAddress: Optional[Address] = None
+    supportedTrusts: List[str] = field(default_factory=list)
+    a2aSkills: List[str] = field(default_factory=list)
+    mcpTools: List[str] = field(default_factory=list)
+    mcpPrompts: List[str] = field(default_factory=list)
+    mcpResources: List[str] = field(default_factory=list)
+    oasfSkills: List[str] = field(default_factory=list)
+    oasfDomains: List[str] = field(default_factory=list)
+    active: bool = False
+    x402support: bool = False
+    createdAt: Optional[int] = None
+    updatedAt: Optional[int] = None
+    lastActivity: Optional[int] = None
+    agentURI: Optional[str] = None
+    agentURIType: Optional[str] = None
+    feedbackCount: Optional[int] = None
+    averageValue: Optional[float] = None
+    semanticScore: Optional[float] = None
+    extras: Dict[str, Any] = field(default_factory=dict)
+```
+
 ## Use Cases
 
 - **Building agent marketplaces** - Create platforms where developers can discover, evaluate, and integrate agents based on their capabilities and reputation
@@ -304,10 +449,9 @@ Browse these files to find appropriate skill and domain slugs. For more informat
 
 ## 🚀 Coming Soon
 
-- More chains (currently Ethereum Sepolia + Ethereum Mainnet)
+- More chains (currently Ethereum Mainnet + Ethereum Sepolia + Polygon Mainnet)
 - Support for validations
 - Enhanced x402 payments
-- Semantic/Vectorial search
 - Advanced reputation aggregation
 - Import/Export to centralized catalogues
 

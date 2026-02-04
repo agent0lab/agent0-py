@@ -475,21 +475,12 @@ class AgentIndexer:
         self,
         filters: SearchFilters,
         options: SearchOptions,
-    ) -> Dict[str, Any]:
+    ) -> List[AgentSummary]:
         """Unified search entry point (replaces all legacy search variants)."""
-        start_ms = int(time.time() * 1000)
-
         if filters.keyword and str(filters.keyword).strip():
-            out = self._search_unified_with_keyword(filters, options)
+            return self._search_unified_with_keyword(filters, options)
         else:
-            out = self._search_unified_no_keyword(filters, options)
-
-        meta = out.get("meta") or {}
-        timing = meta.get("timing") or {}
-        timing["totalMs"] = int(time.time() * 1000) - start_ms
-        meta["timing"] = timing
-        out["meta"] = meta
-        return out
+            return self._search_unified_no_keyword(filters, options)
 
     # -------------------------------------------------------------------------
     # Unified search (v2)
@@ -514,38 +505,7 @@ class AgentIndexer:
             return self._get_all_configured_chains()
         return [self.web3_client.chain_id]
 
-    def _parse_cursor_offset(self, cursor: Optional[str]) -> int:
-        if not cursor:
-            return 0
-        try:
-            n = int(cursor)
-            return n if n >= 0 else 0
-        except Exception:
-            return 0
-
-    def _parse_per_chain_cursor(self, chains: List[int], cursor: Optional[str]) -> Dict[int, int]:
-        out: Dict[int, int] = {c: 0 for c in chains}
-        if not cursor:
-            return out
-        try:
-            data = json.loads(cursor)
-            if isinstance(data, dict):
-                for c in chains:
-                    v = data.get(str(c))
-                    if isinstance(v, int) and v >= 0:
-                        out[c] = v
-                return out
-        except Exception:
-            pass
-        if len(chains) == 1:
-            try:
-                out[chains[0]] = max(0, int(cursor))
-            except Exception:
-                pass
-        return out
-
-    def _encode_per_chain_cursor(self, skips: Dict[int, int]) -> str:
-        return json.dumps({str(k): int(v) for k, v in sorted(skips.items(), key=lambda kv: kv[0])})
+    # Pagination removed: cursor helpers deleted.
 
     def _to_unix_seconds(self, dt: Any) -> int:
         if isinstance(dt, int):
@@ -727,7 +687,6 @@ class AgentIndexer:
         value_hex = self._utf8_to_hex(str(value_str)) if value_str is not None else None
 
         first = 1000
-        max_rows = 5000
         out: Dict[int, List[str]] = {}
 
         for chain_id in chains:
@@ -736,7 +695,8 @@ class AgentIndexer:
                 out[chain_id] = []
                 continue
             ids: List[str] = []
-            for skip in range(0, max_rows, first):
+            skip = 0
+            while True:
                 where: Dict[str, Any] = {"key": key}
                 if value_hex is not None:
                     where["value"] = value_hex
@@ -748,6 +708,7 @@ class AgentIndexer:
                         ids.append(str(aid))
                 if len(rows) < first:
                     break
+                skip += first
             out[chain_id] = sorted(list(set(ids)))
         return out
 
@@ -794,7 +755,6 @@ class AgentIndexer:
                 raise ValueError("feedback.hasNoFeedback requires a pre-filtered candidate set (e.g. agentIds or keyword).")
 
         first = 1000
-        max_rows = 5000
 
         sums: Dict[str, float] = {}
         counts: Dict[str, int] = {}
@@ -832,7 +792,8 @@ class AgentIndexer:
 
             where: Dict[str, Any] = {"and": [base, *and_conditions]} if and_conditions else base
 
-            for skip in range(0, max_rows, first):
+            skip = 0
+            while True:
                 rows = sub.query_feedbacks_minimal(where=where, first=first, skip=skip, order_by="createdAt", order_direction="desc")
                 for r in rows:
                     agent = r.get("agent") or {}
@@ -853,6 +814,7 @@ class AgentIndexer:
                     matched_by_chain.setdefault(chain_id, set()).add(aid_s)
                 if len(rows) < first:
                     break
+                skip += first
 
         stats: Dict[str, Dict[str, float]] = {}
         for aid, cnt in counts.items():
@@ -901,21 +863,21 @@ class AgentIndexer:
 
         return allow, stats
 
-    def _search_unified_no_keyword(self, filters: SearchFilters, options: SearchOptions) -> Dict[str, Any]:
+    def _search_unified_no_keyword(self, filters: SearchFilters, options: SearchOptions) -> List[AgentSummary]:
         if not self.subgraph_client:
             raise ValueError("Subgraph client required for searchAgents")
 
         field, direction = self._parse_sort(options.sort, False)
         chains = self._resolve_chains(filters, False)
-        page_size = options.pageSize or 50
-        per_chain_skip = self._parse_per_chain_cursor(chains, options.cursor)
         ids_by_chain = self._normalize_agent_ids(filters, chains)
         metadata_ids_by_chain = self._prefilter_by_metadata(filters, chains)
+
         candidate_for_feedback: Dict[int, List[str]] = {}
         for c in chains:
             ids0 = self._intersect_ids((ids_by_chain or {}).get(c), (metadata_ids_by_chain or {}).get(c))
             if ids0:
                 candidate_for_feedback[c] = ids0
+
         feedback_ids_by_chain, feedback_stats_by_id = self._prefilter_by_feedback(
             filters, chains, candidate_for_feedback if candidate_for_feedback else None
         )
@@ -924,33 +886,6 @@ class AgentIndexer:
         if field == "feedbackCount":
             order_by = "totalFeedback"
 
-        # Fetch one page per chain (page_size + 1) and merge client-side.
-        chain_results: List[Dict[str, Any]] = []
-        successful: List[int] = []
-        failed: List[int] = []
-
-        for chain_id in chains:
-            client = self._get_subgraph_client_for_chain(chain_id)
-            if client is None:
-                failed.append(chain_id)
-                chain_results.append({"chainId": chain_id, "items": []})
-                continue
-            try:
-                ids0 = self._intersect_ids((ids_by_chain or {}).get(chain_id), (metadata_ids_by_chain or {}).get(chain_id))
-                ids = self._intersect_ids(ids0, (feedback_ids_by_chain or {}).get(chain_id))
-                if ids is not None and len(ids) == 0:
-                    successful.append(chain_id)
-                    chain_results.append({"chainId": chain_id, "items": []})
-                    continue
-                where = self._build_where_v2(filters, ids)
-                agents = client.get_agents_v2(where=where, first=page_size + 1, skip=per_chain_skip.get(chain_id, 0), order_by=order_by, order_direction=direction)
-                successful.append(chain_id)
-                chain_results.append({"chainId": chain_id, "items": agents})
-            except Exception:
-                failed.append(chain_id)
-                chain_results.append({"chainId": chain_id, "items": []})
-
-        # Convert to AgentSummary objects and k-way merge using the same sort field.
         def to_summary(agent_data: Dict[str, Any]) -> AgentSummary:
             reg_file = agent_data.get("registrationFile") or {}
             if not isinstance(reg_file, dict):
@@ -991,73 +926,46 @@ class AgentIndexer:
                 extras={},
             )
 
-        per_chain_lists: Dict[int, List[AgentSummary]] = {r["chainId"]: [to_summary(a) for a in r["items"]] for r in chain_results}
-        indices: Dict[int, int] = {c: 0 for c in chains}
-        consumed: Dict[int, int] = {c: 0 for c in chains}
+        batch = 1000
+        out: List[AgentSummary] = []
+        for chain_id in chains:
+            client = self._get_subgraph_client_for_chain(chain_id)
+            if client is None:
+                continue
+            ids0 = self._intersect_ids((ids_by_chain or {}).get(chain_id), (metadata_ids_by_chain or {}).get(chain_id))
+            ids = self._intersect_ids(ids0, (feedback_ids_by_chain or {}).get(chain_id))
+            if ids is not None and len(ids) == 0:
+                continue
+            where = self._build_where_v2(filters, ids)
 
-        def key(agent: AgentSummary):
-            v = getattr(agent, field, None)
-            if v is None:
-                return 0
-            return v
+            skip = 0
+            while True:
+                agents = client.get_agents_v2(where=where, first=batch, skip=skip, order_by=order_by, order_direction=direction)
+                for a in agents:
+                    out.append(to_summary(a))
+                if len(agents) < batch:
+                    break
+                skip += batch
 
-        def compare(a: AgentSummary, b: AgentSummary) -> bool:
-            # return True if a should come before b
+        reverse = direction == "desc"
+
+        def sort_key(a: AgentSummary):
             if field == "name":
-                av = (a.name or "").lower()
-                bv = (b.name or "").lower()
-                return av < bv if direction == "asc" else av > bv
+                return (a.name or "").lower()
+            v = getattr(a, field, None)
+            if v is None and field == "totalFeedback":
+                v = getattr(a, "feedbackCount", None)
+            if v is None:
+                return 0.0
             try:
-                av = float(key(a))
-                bv = float(key(b))
+                return float(v)
             except Exception:
-                av = 0.0
-                bv = 0.0
-            return av < bv if direction == "asc" else av > bv
+                return 0.0
 
-        merged: List[AgentSummary] = []
-        while len(merged) < page_size:
-            best_chain: Optional[int] = None
-            best_item: Optional[AgentSummary] = None
-            for c in chains:
-                idx = indices[c]
-                arr = per_chain_lists.get(c, [])
-                if idx >= len(arr):
-                    continue
-                cand = arr[idx]
-                if best_item is None or compare(cand, best_item):
-                    best_item = cand
-                    best_chain = c
-            if best_item is None or best_chain is None:
-                break
-            merged.append(best_item)
-            indices[best_chain] += 1
-            consumed[best_chain] += 1
+        return sorted(out, key=sort_key, reverse=reverse)
 
-        has_more = any(
-            (indices[c] < len(per_chain_lists.get(c, []))) or (len(per_chain_lists.get(c, [])) > page_size)
-            for c in chains
-        )
-        next_cursor = None
-        if has_more:
-            next_skips = {c: per_chain_skip.get(c, 0) + consumed.get(c, 0) for c in chains}
-            next_cursor = self._encode_per_chain_cursor(next_skips)
-
-        return {
-            "items": merged,
-            "nextCursor": next_cursor,
-            "meta": {
-                "chains": chains,
-                "successfulChains": successful,
-                "failedChains": failed,
-                "totalResults": 0,
-            },
-        }
-
-    def _search_unified_with_keyword(self, filters: SearchFilters, options: SearchOptions) -> Dict[str, Any]:
+    def _search_unified_with_keyword(self, filters: SearchFilters, options: SearchOptions) -> List[AgentSummary]:
         field, direction = self._parse_sort(options.sort, True)
-        page_size = options.pageSize or 50
-        offset = self._parse_cursor_offset(options.cursor)
         chains = self._resolve_chains(filters, True)
 
         client = SemanticSearchClient()
@@ -1076,8 +984,6 @@ class AgentIndexer:
             score_by_id[r.agentId] = r.score
 
         fetched: List[AgentSummary] = []
-        successful: List[int] = []
-        failed: List[int] = []
 
         metadata_ids_by_chain = self._prefilter_by_metadata(filters, chains)
         feedback_ids_by_chain, feedback_stats_by_id = self._prefilter_by_feedback(filters, chains, ids_by_chain)
@@ -1088,11 +994,8 @@ class AgentIndexer:
             sub = self._get_subgraph_client_for_chain(chain_id)
             ids = ids_by_chain.get(chain_id, [])
             if sub is None:
-                if ids:
-                    failed.append(chain_id)
                 continue
             try:
-                successful.append(chain_id)
                 for i in range(0, len(ids), chunk_size):
                     chunk = ids[i : i + chunk_size]
                     ids2 = self._intersect_ids(chunk, (metadata_ids_by_chain or {}).get(chain_id))
@@ -1146,7 +1049,7 @@ class AgentIndexer:
                             )
                         )
             except Exception:
-                failed.append(chain_id)
+                continue
 
         # Default keyword sorting: semanticScore desc, unless overridden.
         sort_field = field if options.sort and len(options.sort) > 0 else "semanticScore"
@@ -1164,508 +1067,11 @@ class AgentIndexer:
                 return 0
 
         fetched.sort(key=sort_key, reverse=(sort_dir == "desc"))
-        page = fetched[offset : offset + page_size]
-        next_cursor = str(offset + page_size) if len(fetched) > offset + page_size else None
+        return fetched
 
-        return {
-            "items": page,
-            "nextCursor": next_cursor,
-            "meta": {
-                "chains": chains,
-                "successfulChains": successful,
-                "failedChains": failed,
-                "totalResults": len(fetched),
-            },
-        }
+    # Pagination removed: legacy cursor-based multi-chain agent search deleted.
 
-    async def _search_agents_across_chains(
-        self,
-        params: SearchFilters,
-        sort: List[str],
-        page_size: int,
-        cursor: Optional[str] = None,
-        timeout: float = 30.0,
-    ) -> Dict[str, Any]:
-        """
-        Search agents across multiple chains in parallel.
-
-        This method is called when params.chains contains 2+ chain IDs.
-        It executes one subgraph query per chain, all in parallel using asyncio.
-
-        Args:
-            params: Search parameters
-            sort: Sort specification
-            page_size: Number of results per page
-            cursor: Pagination cursor
-            timeout: Maximum time in seconds for all chain queries (default: 30.0)
-
-        Returns:
-            {
-                "items": [agent_dict, ...],
-                "nextCursor": str or None,
-                "meta": {
-                    "chains": [chainId, ...],
-                    "successfulChains": [chainId, ...],
-                    "failedChains": [chainId, ...],
-                    "totalResults": int,
-                    "timing": {"totalMs": int}
-                }
-            }
-        """
-        import time
-        start_time = time.time()
-        # Step 1: Determine which chains to query
-        chains_to_query = params.chains if params.chains else self._get_all_configured_chains()
-
-        if not chains_to_query or len(chains_to_query) == 0:
-            logger.warning("No chains specified or configured for multi-chain query")
-            return {"items": [], "nextCursor": None, "meta": {"chains": [], "successfulChains": [], "failedChains": []}}
-
-        # Step 2: Parse pagination cursor (if any)
-        chain_cursors = self._parse_multi_chain_cursor(cursor)
-        global_offset = chain_cursors.get("_global_offset", 0)
-
-        # Step 3: Define async function for querying a single chain
-        async def query_single_chain(chain_id: int) -> Dict[str, Any]:
-            """Query one chain and return its results with metadata."""
-            try:
-                # Get subgraph client for this chain
-                subgraph_client = self._get_subgraph_client_for_chain(chain_id)
-
-                if subgraph_client is None:
-                    logger.warning(f"No subgraph client available for chain {chain_id}")
-                    return {
-                        "chainId": chain_id,
-                        "status": "unavailable",
-                        "agents": [],
-                        "error": f"No subgraph configured for chain {chain_id}"
-                    }
-
-                # Build WHERE clause for this chain's query
-                # (reuse existing logic from _search_agents_via_subgraph)
-                where_clause = {}
-                reg_file_where = {}
-
-                if params.name is not None:
-                    reg_file_where["name_contains"] = params.name
-                if params.active is not None:
-                    reg_file_where["active"] = params.active
-                if params.x402support is not None:
-                    reg_file_where["x402support"] = params.x402support
-                if params.hasMCP is not None:
-                    if params.hasMCP:
-                        reg_file_where["mcpEndpoint_not"] = None
-                    else:
-                        reg_file_where["mcpEndpoint"] = None
-                if params.hasA2A is not None:
-                    if params.hasA2A:
-                        reg_file_where["a2aEndpoint_not"] = None
-                    else:
-                        reg_file_where["a2aEndpoint"] = None
-                if params.ensContains is not None:
-                    reg_file_where["ens_contains_nocase"] = params.ensContains
-                if params.didContains is not None:
-                    reg_file_where["did_contains_nocase"] = params.didContains
-                if params.walletAddress is not None:
-                    reg_file_where["agentWallet"] = params.walletAddress
-
-                if reg_file_where:
-                    where_clause["registrationFile_"] = reg_file_where
-
-                # Owner filtering
-                if params.owners is not None and len(params.owners) > 0:
-                    normalized_owners = [owner.lower() for owner in params.owners]
-                    if len(normalized_owners) == 1:
-                        where_clause["owner"] = normalized_owners[0]
-                    else:
-                        where_clause["owner_in"] = normalized_owners
-
-                # Operator filtering
-                if params.operators is not None and len(params.operators) > 0:
-                    normalized_operators = [op.lower() for op in params.operators]
-                    where_clause["operators_contains"] = normalized_operators
-
-                # Get pagination offset for this chain (not used in multi-chain, fetch all)
-                skip = 0
-
-                # Execute subgraph query
-                agents = subgraph_client.get_agents(
-                    where=where_clause if where_clause else None,
-                    first=page_size * 3,  # Fetch extra to allow for filtering/sorting
-                    skip=skip,
-                    order_by=self._extract_order_by(sort),
-                    order_direction=self._extract_order_direction(sort)
-                )
-
-                logger.info(f"Chain {chain_id}: fetched {len(agents)} agents")
-
-                return {
-                    "chainId": chain_id,
-                    "status": "success",
-                    "agents": agents,
-                    "count": len(agents),
-                }
-
-            except Exception as e:
-                logger.error(f"Error querying chain {chain_id}: {e}", exc_info=True)
-                return {
-                    "chainId": chain_id,
-                    "status": "error",
-                    "agents": [],
-                    "error": str(e)
-                }
-
-        # Step 4: Execute all chain queries in parallel with timeout
-        logger.info(f"Querying {len(chains_to_query)} chains in parallel: {chains_to_query}")
-        tasks = [query_single_chain(chain_id) for chain_id in chains_to_query]
-
-        try:
-            chain_results = await asyncio.wait_for(
-                asyncio.gather(*tasks),
-                timeout=timeout
-            )
-        except asyncio.TimeoutError:
-            logger.error(f"Multi-chain query timed out after {timeout}s")
-            # Collect results from completed tasks
-            chain_results = []
-            for task in tasks:
-                if task.done():
-                    try:
-                        chain_results.append(task.result())
-                    except Exception as e:
-                        logger.warning(f"Task failed: {e}")
-                else:
-                    # Task didn't complete - mark as timeout
-                    chain_results.append({
-                        "chainId": None,
-                        "status": "timeout",
-                        "agents": [],
-                        "error": f"Query timed out after {timeout}s"
-                    })
-
-        # Step 5: Extract successful results and track failures
-        all_agents = []
-        successful_chains = []
-        failed_chains = []
-
-        for result in chain_results:
-            chain_id = result["chainId"]
-
-            if result["status"] == "success":
-                successful_chains.append(chain_id)
-                all_agents.extend(result["agents"])
-            else:
-                failed_chains.append(chain_id)
-                logger.warning(
-                    f"Chain {chain_id} query failed: {result.get('error', 'Unknown error')}"
-                )
-
-        logger.info(f"Multi-chain query: {len(successful_chains)} successful, {len(failed_chains)} failed, {len(all_agents)} total agents")
-
-        # If ALL chains failed, raise error
-        if len(successful_chains) == 0:
-            raise ConnectionError(
-                f"All chains failed: {', '.join(str(c) for c in failed_chains)}"
-            )
-
-        # Step 6: Apply cross-chain filtering (for fields not supported by subgraph WHERE clause)
-        filtered_agents = self._apply_cross_chain_filters(all_agents, params)
-        logger.info(f"After cross-chain filters: {len(filtered_agents)} agents")
-
-        # Step 7: Deduplicate if requested
-        deduplicated_agents = self._deduplicate_agents_cross_chain(filtered_agents, params)
-        logger.info(f"After deduplication: {len(deduplicated_agents)} agents")
-
-        # Step 8: Sort across chains
-        sorted_agents = self._sort_agents_cross_chain(deduplicated_agents, sort)
-        logger.info(f"After sorting: {len(sorted_agents)} agents")
-
-        # Step 9: Apply pagination
-        start_idx = global_offset
-        paginated_agents = sorted_agents[start_idx:start_idx + page_size]
-
-        # Step 10: Convert to result format (keep as dicts, SDK will convert to AgentSummary)
-        results = []
-        for agent_data in paginated_agents:
-            reg_file = agent_data.get('registrationFile') or {}
-            if not isinstance(reg_file, dict):
-                reg_file = {}
-
-            result_agent = {
-                "agentId": agent_data.get('id'),
-                "chainId": agent_data.get('chainId'),
-                "name": reg_file.get('name', f"Agent {agent_data.get('agentId')}"),
-                "description": reg_file.get('description', ''),
-                "image": reg_file.get('image'),
-                "owner": agent_data.get('owner'),
-                "operators": agent_data.get('operators', []),
-                "mcp": reg_file.get('mcpEndpoint') is not None,
-                "a2a": reg_file.get('a2aEndpoint') is not None,
-                "ens": reg_file.get('ens'),
-                "did": reg_file.get('did'),
-                "walletAddress": reg_file.get('agentWallet'),
-                "supportedTrusts": reg_file.get('supportedTrusts', []),
-                "a2aSkills": reg_file.get('a2aSkills', []),
-                "mcpTools": reg_file.get('mcpTools', []),
-                "mcpPrompts": reg_file.get('mcpPrompts', []),
-                "mcpResources": reg_file.get('mcpResources', []),
-                "active": reg_file.get('active', True),
-                "x402support": reg_file.get('x402Support', reg_file.get('x402support', False)),
-                "totalFeedback": agent_data.get('totalFeedback', 0),
-                "lastActivity": agent_data.get('lastActivity'),
-                "updatedAt": agent_data.get('updatedAt'),
-                "extras": {}
-            }
-
-            # Add deployedOn if deduplication was used
-            if 'deployedOn' in agent_data:
-                result_agent['extras']['deployedOn'] = agent_data['deployedOn']
-
-            results.append(result_agent)
-
-        # Step 11: Calculate next cursor
-        next_cursor = None
-        if len(sorted_agents) > start_idx + page_size:
-            # More results available
-            next_cursor = self._create_multi_chain_cursor(
-                global_offset=start_idx + page_size
-            )
-
-        # Step 12: Build response with metadata
-        query_time = time.time() - start_time
-
-        return {
-            "items": results,
-            "nextCursor": next_cursor,
-            "meta": {
-                "chains": chains_to_query,
-                "successfulChains": successful_chains,
-                "failedChains": failed_chains,
-                "totalResults": len(sorted_agents),
-                "pageResults": len(results),
-                "timing": {
-                    "totalMs": int(query_time * 1000),
-                    "averagePerChainMs": int(query_time * 1000 / len(chains_to_query)) if chains_to_query else 0,
-                }
-            }
-        }
-
-    def _search_agents_via_subgraph(
-        self,
-        params: SearchFilters,
-        sort: List[str],
-        page_size: int,
-        cursor: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Search for agents using the subgraph."""
-        # Build subgraph query filters
-        where_clause = {}
-        reg_file_where = {}
-        
-        if params.name is not None:
-            reg_file_where["name_contains"] = params.name
-        if params.active is not None:
-            reg_file_where["active"] = params.active
-        if params.x402support is not None:
-            reg_file_where["x402support"] = params.x402support
-        if params.hasMCP is not None:
-            if params.hasMCP:
-                reg_file_where["mcpEndpoint_not"] = None
-            else:
-                reg_file_where["mcpEndpoint"] = None
-        if params.hasA2A is not None:
-            if params.hasA2A:
-                reg_file_where["a2aEndpoint_not"] = None
-            else:
-                reg_file_where["a2aEndpoint"] = None
-        if params.ensContains is not None:
-            reg_file_where["ens_contains_nocase"] = params.ensContains
-        if params.didContains is not None:
-            reg_file_where["did_contains_nocase"] = params.didContains
-        if params.walletAddress is not None:
-            reg_file_where["agentWallet"] = params.walletAddress
-
-        if reg_file_where:
-            where_clause["registrationFile_"] = reg_file_where
-
-        # Owner filtering
-        if params.owners is not None and len(params.owners) > 0:
-            # Normalize addresses to lowercase for case-insensitive matching
-            normalized_owners = [owner.lower() for owner in params.owners]
-            if len(normalized_owners) == 1:
-                where_clause["owner"] = normalized_owners[0]
-            else:
-                where_clause["owner_in"] = normalized_owners
-
-        # Operator filtering 
-        if params.operators is not None and len(params.operators) > 0:
-            # Normalize addresses to lowercase for case-insensitive matching
-            normalized_operators = [op.lower() for op in params.operators]
-            # For operators (array field), use contains to check if any operator matches
-            where_clause["operators_contains"] = normalized_operators
-        
-        # Calculate pagination
-        skip = 0
-        if cursor:
-            try:
-                skip = int(cursor)
-            except ValueError:
-                skip = 0
-        
-        # Determine sort
-        order_by = "createdAt"
-        order_direction = "desc"
-        if sort and len(sort) > 0:
-            sort_field = sort[0].split(":")
-            if len(sort_field) >= 1:
-                order_by = sort_field[0]
-            if len(sort_field) >= 2:
-                order_direction = sort_field[1]
-        
-        try:
-            agents = self.subgraph_client.get_agents(
-                where=where_clause if where_clause else None,
-                first=page_size,
-                skip=skip,
-                order_by=order_by,
-                order_direction=order_direction
-            )
-            
-            results = []
-            for agent in agents:
-                reg_file = agent.get('registrationFile') or {}
-                # Ensure reg_file is a dict
-                if not isinstance(reg_file, dict):
-                    reg_file = {}
-                    
-                agent_data = {
-                    "agentId": agent.get('id'),
-                    "chainId": agent.get('chainId'),
-                    "name": reg_file.get('name', f"Agent {agent.get('agentId')}"),
-                    "description": reg_file.get('description', ''),
-                    "image": reg_file.get('image'),
-                    "owner": agent.get('owner'),
-                    "operators": agent.get('operators', []),
-                    "mcp": reg_file.get('mcpEndpoint') is not None,
-                    "a2a": reg_file.get('a2aEndpoint') is not None,
-                    "ens": reg_file.get('ens'),
-                    "did": reg_file.get('did'),
-                    "walletAddress": reg_file.get('agentWallet'),
-                    "supportedTrusts": reg_file.get('supportedTrusts', []),
-                    "a2aSkills": reg_file.get('a2aSkills', []),
-                    "mcpTools": reg_file.get('mcpTools', []),
-                    "mcpPrompts": reg_file.get('mcpPrompts', []),
-                    "mcpResources": reg_file.get('mcpResources', []),
-                    "active": reg_file.get('active', True),
-                    "x402support": reg_file.get('x402Support', reg_file.get('x402support', False)),
-                    "totalFeedback": agent.get('totalFeedback', 0),
-                    "lastActivity": agent.get('lastActivity'),
-                    "updatedAt": agent.get('updatedAt'),
-                    "extras": {}
-                }
-                
-                if params.chains is not None:
-                    if agent_data["chainId"] not in params.chains:
-                        continue
-                if params.supportedTrust is not None:
-                    if not any(trust in agent_data["supportedTrusts"] for trust in params.supportedTrust):
-                        continue
-                
-                results.append(agent_data)
-            
-            next_cursor = str(skip + len(results)) if len(results) == page_size else None
-            return {"items": results, "nextCursor": next_cursor}
-            
-        except Exception as e:
-            logger.warning(f"Subgraph search failed: {e}")
-            return {"items": [], "nextCursor": None}
-    
-    def _search_agents_via_blockchain(
-        self,
-        params: SearchFilters,
-        sort: List[str],
-        page_size: int,
-        cursor: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Search for agents by querying the blockchain (fallback)."""
-        return {"items": [], "nextCursor": None}
-
-    def _apply_filters(self, agents: List[Dict[str, Any]], params: SearchFilters) -> List[Dict[str, Any]]:
-        """Apply search filters to agents."""
-        filtered = agents
-        
-        if params.chains is not None:
-            filtered = [a for a in filtered if a.get("chainId") in params.chains]
-        
-        if params.name is not None:
-            filtered = [a for a in filtered if params.name.lower() in a.get("name", "").lower()]
-        
-        if params.description is not None:
-            # This would use semantic search with embeddings
-            filtered = [a for a in filtered if params.description.lower() in a.get("description", "").lower()]
-        
-        if params.owners is not None:
-            filtered = [a for a in filtered if any(owner in params.owners for owner in a.get("owners", []))]
-        
-        if params.operators is not None:
-            filtered = [a for a in filtered if any(op in params.operators for op in a.get("operators", []))]
-        
-        if getattr(params, "hasMCP", None) is not None:
-            has = params.hasMCP
-            filtered = [a for a in filtered if bool(a.get("mcp")) == bool(has)]
-        
-        if getattr(params, "hasA2A", None) is not None:
-            has = params.hasA2A
-            filtered = [a for a in filtered if bool(a.get("a2a")) == bool(has)]
-        
-        if getattr(params, "ensContains", None) is not None:
-            needle = (params.ensContains or "").lower()
-            filtered = [a for a in filtered if needle in (a.get("ens") or "").lower()]
-        
-        if getattr(params, "didContains", None) is not None:
-            needle = (params.didContains or "").lower()
-            filtered = [a for a in filtered if needle in (a.get("did") or "").lower()]
-        
-        if params.walletAddress is not None:
-            filtered = [a for a in filtered if a.get("walletAddress") == params.walletAddress]
-        
-        if params.supportedTrust is not None:
-            filtered = [a for a in filtered if any(trust in params.supportedTrust for trust in a.get("supportedTrusts", []))]
-        
-        if params.a2aSkills is not None:
-            filtered = [a for a in filtered if any(skill in params.a2aSkills for skill in a.get("a2aSkills", []))]
-        
-        if params.mcpTools is not None:
-            filtered = [a for a in filtered if any(tool in params.mcpTools for tool in a.get("mcpTools", []))]
-        
-        if params.mcpPrompts is not None:
-            filtered = [a for a in filtered if any(prompt in params.mcpPrompts for prompt in a.get("mcpPrompts", []))]
-        
-        if params.mcpResources is not None:
-            filtered = [a for a in filtered if any(resource in params.mcpResources for resource in a.get("mcpResources", []))]
-        
-        if params.active is not None:
-            filtered = [a for a in filtered if a.get("active") == params.active]
-        
-        if params.x402support is not None:
-            filtered = [a for a in filtered if a.get("x402support") == params.x402support]
-        
-        return filtered
-
-    def _apply_sorting(self, agents: List[AgentSummary], sort: List[str]) -> List[AgentSummary]:
-        """Apply sorting to agents."""
-        def sort_key(agent):
-            key_values = []
-            for sort_field in sort:
-                field, direction = sort_field.split(":", 1)
-                if hasattr(agent, field):
-                    value = getattr(agent, field)
-                    if direction == "desc":
-                        value = -value if isinstance(value, (int, float)) else value
-                    key_values.append(value)
-            return key_values
-        
-        return sorted(agents, key=sort_key)
+    # Pagination removed: legacy cursor-based agent search helpers deleted.
 
     def get_feedback(
         self,
@@ -1806,8 +1212,6 @@ class AgentIndexer:
         minValue: Optional[float] = None,
         maxValue: Optional[float] = None,
         include_revoked: bool = False,
-        first: int = 100,
-        skip: int = 0,
         agents: Optional[List[AgentId]] = None,
     ) -> List[Feedback]:
         """Search feedback via subgraph.
@@ -1876,8 +1280,6 @@ class AgentIndexer:
                 minValue=minValue,
                 maxValue=maxValue,
                 include_revoked=include_revoked,
-                first=first,
-                skip=skip,
                 subgraph_client=subgraph_client,
             )
         
@@ -1898,8 +1300,6 @@ class AgentIndexer:
         minValue: Optional[float],
         maxValue: Optional[float],
         include_revoked: bool,
-        first: int,
-        skip: int,
         subgraph_client: Optional[Any] = None,
     ) -> List[Feedback]:
         """Search feedback using subgraph."""
@@ -1928,34 +1328,39 @@ class AgentIndexer:
             includeRevoked=include_revoked
         )
         
-        # Query subgraph
-        feedbacks_data = client.search_feedback(
-            params=params,
-            first=first,
-            skip=skip,
-            order_by="createdAt",
-            order_direction="desc"
-        )
-        
-        # Map to Feedback objects
         feedbacks = []
-        for fb_data in feedbacks_data:
-            # Parse agentId from feedback ID
-            feedback_id = fb_data['id']
-            parts = feedback_id.split(':')
-            if len(parts) >= 2:
-                agent_id_str = f"{parts[0]}:{parts[1]}"
-                client_addr = parts[2] if len(parts) > 2 else ""
-                feedback_idx = int(parts[3]) if len(parts) > 3 else 1
-            else:
-                agent_id_str = feedback_id
-                client_addr = ""
-                feedback_idx = 1
-            
-            feedback = self._map_subgraph_feedback_to_model(
-                fb_data, agent_id_str, client_addr, feedback_idx
+        batch = 1000
+        skip = 0
+        while True:
+            feedbacks_data = client.search_feedback(
+                params=params,
+                first=batch,
+                skip=skip,
+                order_by="createdAt",
+                order_direction="desc",
             )
-            feedbacks.append(feedback)
+
+            for fb_data in feedbacks_data:
+                # Parse agentId from feedback ID
+                feedback_id = fb_data['id']
+                parts = feedback_id.split(':')
+                if len(parts) >= 2:
+                    agent_id_str = f"{parts[0]}:{parts[1]}"
+                    client_addr = parts[2] if len(parts) > 2 else ""
+                    feedback_idx = int(parts[3]) if len(parts) > 3 else 1
+                else:
+                    agent_id_str = feedback_id
+                    client_addr = ""
+                    feedback_idx = 1
+
+                feedback = self._map_subgraph_feedback_to_model(
+                    fb_data, agent_id_str, client_addr, feedback_idx
+                )
+                feedbacks.append(feedback)
+
+            if len(feedbacks_data) < batch:
+                break
+            skip += batch
         
         return feedbacks
     
@@ -2010,15 +1415,12 @@ class AgentIndexer:
         since: Optional[Timestamp] = None,
         until: Optional[Timestamp] = None,
         sort: List[str] = None,
-        page_size: int = 100,
-        cursor: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Get reputation summary for an agent."""
         # This would aggregate feedback data
         # For now, return empty result
         return {
             "groups": [],
-            "nextCursor": None
         }
 
     def get_reputation_map(
@@ -2420,55 +1822,7 @@ class AgentIndexer:
 
         return sorted(agents, key=get_sort_key, reverse=reverse)
 
-    def _parse_multi_chain_cursor(self, cursor: Optional[str]) -> Dict[int, int]:
-        """
-        Parse multi-chain cursor into per-chain offsets.
-
-        Cursor format (JSON):
-        {
-            "11155111": 50,  # Ethereum Sepolia offset
-            "84532": 30,     # Base Sepolia offset
-            "_global_offset": 100  # Total items returned so far
-        }
-
-        Returns:
-            Dict mapping chainId → offset (default 0)
-        """
-        if not cursor:
-            return {}
-
-        try:
-            cursor_data = json.loads(cursor)
-
-            # Validate format
-            if not isinstance(cursor_data, dict):
-                logger.warning(f"Invalid cursor format: {cursor}, using empty")
-                return {}
-
-            return cursor_data
-
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse cursor: {e}, using empty")
-            return {}
-
-    def _create_multi_chain_cursor(
-        self,
-        global_offset: int,
-    ) -> str:
-        """
-        Create multi-chain cursor for next page.
-
-        Args:
-            global_offset: Total items returned so far
-
-        Returns:
-            JSON string cursor
-        """
-        cursor_data = {
-            "_global_offset": global_offset
-        }
-
-        return json.dumps(cursor_data)
+    # Pagination removed: multi-chain cursor helpers deleted.
 
     def _extract_order_by(self, sort: List[str]) -> str:
         """Extract order_by field from sort specification."""

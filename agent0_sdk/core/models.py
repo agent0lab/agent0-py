@@ -165,11 +165,6 @@ class AgentSummary:
     description: str
     owners: List[Address]
     operators: List[Address]
-    # Endpoint strings (new unified search + Jan 2026 schema)
-    mcp: Optional[str] = None
-    a2a: Optional[str] = None
-    web: Optional[str] = None
-    email: Optional[str] = None
     ens: Optional[str]
     did: Optional[str]
     walletAddress: Optional[Address]
@@ -178,9 +173,14 @@ class AgentSummary:
     mcpTools: List[str]
     mcpPrompts: List[str]
     mcpResources: List[str]
+    active: bool
+    # Endpoint strings (new unified search + Jan 2026 schema)
+    mcp: Optional[str] = None
+    a2a: Optional[str] = None
+    web: Optional[str] = None
+    email: Optional[str] = None
     oasfSkills: List[str] = field(default_factory=list)
     oasfDomains: List[str] = field(default_factory=list)
-    active: bool
     x402support: bool = False
     createdAt: Optional[int] = None
     updatedAt: Optional[int] = None
@@ -358,8 +358,6 @@ class SearchFilters:
 @dataclass
 class SearchOptions:
     sort: Optional[List[str]] = None
-    pageSize: Optional[int] = None
-    cursor: Optional[str] = None
     semanticMinScore: Optional[float] = None
     semanticTopK: Optional[int] = None
 

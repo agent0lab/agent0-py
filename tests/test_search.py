@@ -418,6 +418,6 @@ def test_search_live():
         pytest.skip("SUBGRAPH_URL not set")
     # Strict integration checks (do not swallow exceptions).
     sdk = SDK(chainId=CHAIN_ID, rpcUrl=RPC_URL)
-    results = sdk.searchAgents(filters={}, options={"pageSize": 5, "sort": []})
-    assert "items" in results
-    assert len(results["items"]) > 0
+    results = sdk.searchAgents(filters={}, options={"sort": []})
+    assert isinstance(results, list)
+    assert len(results) > 0

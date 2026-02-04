@@ -463,7 +463,7 @@ class SDK:
         filters: Union[SearchFilters, Dict[str, Any], None] = None,
         options: Union[SearchOptions, Dict[str, Any], None] = None,
         **kwargs  # Accept search criteria as kwargs for better DX
-    ) -> Dict[str, Any]:
+    ) -> List[AgentSummary]:
         """Search for agents.
         
         Examples:
@@ -473,9 +473,6 @@ class SDK:
             
             # Explicit SearchParams (for complex queries or IDE autocomplete)
             sdk.searchAgents(SearchParams(name="Test", mcpTools=["code_generation"]))
-            
-            # With pagination
-            sdk.searchAgents(name="Test", page_size=10)
         """
         # Allow kwargs to populate filters for better DX.
         if kwargs and filters is None:
@@ -488,19 +485,17 @@ class SDK:
             if isinstance(filters.get("feedback"), dict):
                 filters["feedback"] = FeedbackFilters(**filters["feedback"])
             filters = SearchFilters(**filters)
-
+        
         if options is None:
             options = SearchOptions()
         elif isinstance(options, dict):
             options = SearchOptions(**options)
 
-        if options.sort is None:
-            options.sort = ["updatedAt:desc"]
-
-        if options.pageSize is None:
-            options.pageSize = 50
-
-        return self.indexer.search_agents(filters, options)
+        # Do not force a default sort here; the indexer chooses keyword-aware defaults.
+        out = self.indexer.search_agents(filters, options)
+        if isinstance(out, dict):
+            return out.get("items") or []
+        return out or []
 
     # Feedback methods are defined later in this class (single authoritative API).
     
@@ -559,8 +554,6 @@ class SDK:
         minValue: Optional[float] = None,
         maxValue: Optional[float] = None,
         include_revoked: bool = False,
-        first: int = 100,
-        skip: int = 0,
         agents: Optional[List["AgentId"]] = None,
     ) -> List["Feedback"]:
         """Search feedback.
@@ -602,8 +595,6 @@ class SDK:
             minValue=minValue,
             maxValue=maxValue,
             include_revoked=include_revoked,
-            first=first,
-            skip=skip,
         )
     
     def revokeFeedback(

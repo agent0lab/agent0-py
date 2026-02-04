@@ -21,7 +21,7 @@ class SemanticSearchClient:
     def __init__(
         self,
         base_url: str = "https://semantic-search.ag0.xyz",
-        timeout_seconds: float = 10.0,
+        timeout_seconds: float = 20.0,
     ):
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
@@ -30,11 +30,15 @@ class SemanticSearchClient:
         if not query or not query.strip():
             return []
 
-        body = {"query": query.strip()}
-        if min_score is not None:
-            body["minScore"] = min_score
-        if top_k is not None:
-            body["topK"] = top_k
+        # SDK defaults (applied here so developers don't need to pass them).
+        # - minScore: 0.5
+        # - topK: 5000 (API expects "limit" not "topK" in v1)
+        if min_score is None:
+            min_score = 0.5
+        if top_k is None:
+            top_k = 5000
+
+        body = {"query": query.strip(), "minScore": min_score, "limit": top_k}
 
         resp = requests.post(
             f"{self.base_url}/api/v1/search",

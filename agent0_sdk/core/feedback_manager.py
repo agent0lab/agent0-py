@@ -422,8 +422,6 @@ class FeedbackManager:
         minValue: Optional[float] = None,
         maxValue: Optional[float] = None,
         include_revoked: bool = False,
-        first: int = 100,
-        skip: int = 0,
         agents: Optional[List[AgentId]] = None,
     ) -> List[Feedback]:
         """Search feedback.
@@ -451,8 +449,6 @@ class FeedbackManager:
                 minValue,
                 maxValue,
                 include_revoked,
-                first,
-                skip,
                 agents=agents,
             )
         
@@ -469,8 +465,6 @@ class FeedbackManager:
                 minValue,
                 maxValue,
                 include_revoked,
-                first,
-                skip,
                 agents=agents,
             )
         
@@ -558,8 +552,6 @@ class FeedbackManager:
         minValue: Optional[float],
         maxValue: Optional[float],
         include_revoked: bool,
-        first: int,
-        skip: int,
         agents: Optional[List[AgentId]] = None,
     ) -> List[Feedback]:
         """Search feedback using subgraph."""
@@ -583,79 +575,84 @@ class FeedbackManager:
             includeRevoked=include_revoked
         )
         
-        # Query subgraph
-        feedbacks_data = self.subgraph_client.search_feedback(
-            params=params,
-            first=first,
-            skip=skip,
-            order_by="createdAt",
-            order_direction="desc"
-        )
-        
-        # Map to Feedback objects
         feedbacks = []
-        for fb_data in feedbacks_data:
-            feedback_file = fb_data.get('feedbackFile') or {}
-            if not isinstance(feedback_file, dict):
-                feedback_file = {}
-            
-            # Map responses
-            responses_data = fb_data.get('responses', [])
-            answers = []
-            for resp in responses_data:
-                answers.append({
-                    'responder': resp.get('responder'),
-                    'responseUri': resp.get('responseUri'),
-                    'responseHash': resp.get('responseHash'),
-                    'createdAt': resp.get('createdAt')
-                })
-            
-            # Map tags: rely on whatever the subgraph returns (may be legacy bytes/hash-like values)
-            tags_list: List[str] = []
-            tag1 = fb_data.get('tag1') or feedback_file.get('tag1')
-            tag2 = fb_data.get('tag2') or feedback_file.get('tag2')
-            if isinstance(tag1, str) and tag1:
-                    tags_list.append(tag1)
-            if isinstance(tag2, str) and tag2:
-                    tags_list.append(tag2)
-            
-            # Parse agentId from feedback ID
-            feedback_id = fb_data['id']
-            parts = feedback_id.split(':')
-            if len(parts) >= 2:
-                agent_id_str = f"{parts[0]}:{parts[1]}"
-                client_addr = parts[2] if len(parts) > 2 else ""
-                feedback_idx = int(parts[3]) if len(parts) > 3 else 1
-            else:
-                agent_id_str = feedback_id
-                client_addr = ""
-                feedback_idx = 1
-            
-            feedback = Feedback(
-                id=Feedback.create_id(agent_id_str, client_addr, feedback_idx),
-                agentId=agent_id_str,
-                reviewer=client_addr,
-                value=float(fb_data.get("value")) if fb_data.get("value") is not None else None,
-                tags=tags_list,
-                text=feedback_file.get('text'),
-                capability=feedback_file.get('capability'),
-                context=feedback_file.get('context'),
-                proofOfPayment={
-                    'fromAddress': feedback_file.get('proofOfPaymentFromAddress'),
-                    'toAddress': feedback_file.get('proofOfPaymentToAddress'),
-                    'chainId': feedback_file.get('proofOfPaymentChainId'),
-                    'txHash': feedback_file.get('proofOfPaymentTxHash'),
-                } if feedback_file.get('proofOfPaymentFromAddress') else None,
-                fileURI=fb_data.get('feedbackURI') or fb_data.get('feedbackUri'),  # Handle both old and new field names
-                endpoint=fb_data.get('endpoint'),
-                createdAt=fb_data.get('createdAt', int(time.time())),
-                answers=answers,
-                isRevoked=fb_data.get('isRevoked', False),
-                name=feedback_file.get('name'),
-                skill=feedback_file.get('skill'),
-                task=feedback_file.get('task'),
+        batch = 1000
+        skip = 0
+        while True:
+            feedbacks_data = self.subgraph_client.search_feedback(
+                params=params,
+                first=batch,
+                skip=skip,
+                order_by="createdAt",
+                order_direction="desc",
             )
-            feedbacks.append(feedback)
+
+            for fb_data in feedbacks_data:
+                feedback_file = fb_data.get('feedbackFile') or {}
+                if not isinstance(feedback_file, dict):
+                    feedback_file = {}
+
+                # Map responses
+                responses_data = fb_data.get('responses', [])
+                answers = []
+                for resp in responses_data:
+                    answers.append({
+                        'responder': resp.get('responder'),
+                        'responseUri': resp.get('responseUri'),
+                        'responseHash': resp.get('responseHash'),
+                        'createdAt': resp.get('createdAt')
+                    })
+
+                # Map tags: rely on whatever the subgraph returns (may be legacy bytes/hash-like values)
+                tags_list: List[str] = []
+                tag1 = fb_data.get('tag1') or feedback_file.get('tag1')
+                tag2 = fb_data.get('tag2') or feedback_file.get('tag2')
+                if isinstance(tag1, str) and tag1:
+                    tags_list.append(tag1)
+                if isinstance(tag2, str) and tag2:
+                    tags_list.append(tag2)
+
+                # Parse agentId from feedback ID
+                feedback_id = fb_data['id']
+                parts = feedback_id.split(':')
+                if len(parts) >= 2:
+                    agent_id_str = f"{parts[0]}:{parts[1]}"
+                    client_addr = parts[2] if len(parts) > 2 else ""
+                    feedback_idx = int(parts[3]) if len(parts) > 3 else 1
+                else:
+                    agent_id_str = feedback_id
+                    client_addr = ""
+                    feedback_idx = 1
+
+                feedback = Feedback(
+                    id=Feedback.create_id(agent_id_str, client_addr, feedback_idx),
+                    agentId=agent_id_str,
+                    reviewer=client_addr,
+                    value=float(fb_data.get("value")) if fb_data.get("value") is not None else None,
+                    tags=tags_list,
+                    text=feedback_file.get('text'),
+                    capability=feedback_file.get('capability'),
+                    context=feedback_file.get('context'),
+                    proofOfPayment={
+                        'fromAddress': feedback_file.get('proofOfPaymentFromAddress'),
+                        'toAddress': feedback_file.get('proofOfPaymentToAddress'),
+                        'chainId': feedback_file.get('proofOfPaymentChainId'),
+                        'txHash': feedback_file.get('proofOfPaymentTxHash'),
+                    } if feedback_file.get('proofOfPaymentFromAddress') else None,
+                    fileURI=fb_data.get('feedbackURI') or fb_data.get('feedbackUri'),  # Handle both old and new field names
+                    endpoint=fb_data.get('endpoint'),
+                    createdAt=fb_data.get('createdAt', int(time.time())),
+                    answers=answers,
+                    isRevoked=fb_data.get('isRevoked', False),
+                    name=feedback_file.get('name'),
+                    skill=feedback_file.get('skill'),
+                    task=feedback_file.get('task'),
+                )
+                feedbacks.append(feedback)
+
+            if len(feedbacks_data) < batch:
+                break
+            skip += batch
         
         return feedbacks
 
