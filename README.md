@@ -37,7 +37,7 @@ pip install agent0-sdk
 To install a specific version explicitly:
 
 ```bash
-pip install agent0-sdk==1.5.2
+pip install agent0-sdk==1.5.3
 ```
 
 ### Install from Source
@@ -449,7 +449,7 @@ class AgentSummary:
 
 ## 🚀 Coming Soon
 
-- More chains (currently Ethereum Mainnet + Ethereum Sepolia + Polygon Mainnet)
+- More chains (currently Ethereum Mainnet + Base Mainnet + Ethereum Sepolia + Base Sepolia + Polygon Mainnet)
 - Support for validations
 - Enhanced x402 payments
 - Advanced reputation aggregation
