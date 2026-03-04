@@ -6,11 +6,15 @@ Feedback model uses spec-aligned fields (mcpTool, a2aSkills, a2aTaskId, etc.); l
 See docs/TS_PY_SDK_DIFFERENCES.md for context.
 """
 
+import os
 import pytest
 from unittest.mock import MagicMock
 
 from agent0_sdk.core.feedback_manager import FeedbackManager
 from agent0_sdk.core.web3_client import Web3Client
+
+# Live subgraph: run when SUBGRAPH_URL is set (or RUN_LIVE_TESTS=1)
+RUN_LIVE_SUBGRAPH = os.getenv("RUN_LIVE_TESTS", "0") == "1" or bool(os.getenv("SUBGRAPH_URL", "").strip())
 
 
 @pytest.fixture
@@ -97,3 +101,47 @@ def test_subgraph_row_to_feedback_spec_fields(mock_web3):
     assert feedback.reviewer == "0x1234567890123456789012345678901234567890"
     assert feedback.tags == ["tag1"]
     assert feedback.text == "Great"
+
+
+# --- Live subgraph tests (parity with TS: same SUBGRAPH_URL default in config, same Feedback spec fields) ---
+# Run with: RUN_LIVE_TESTS=1 pytest tests/test_subgraph_alignment.py -v
+# Both Py and TS use spec-aligned Feedback (mcpTool, a2aSkills, ...); no legacy capability/skill/task/context.
+SPEC_FIELDS = {"mcpTool", "mcpPrompt", "mcpResource", "a2aSkills", "a2aContextId", "a2aTaskId", "oasfSkills", "oasfDomains"}
+
+
+@pytest.mark.skipif(not RUN_LIVE_SUBGRAPH, reason="RUN_LIVE_TESTS=1 or SUBGRAPH_URL required for live subgraph")
+def test_live_subgraph_search_feedback_returns_spec_aligned_feedback():
+    """Against live subgraph: searchFeedback succeeds and returned Feedback has spec fields (no GraphQL errors)."""
+    from agent0_sdk import SDK
+    from tests.config import CHAIN_ID, RPC_URL, SUBGRAPH_URL, AGENT_ID
+
+    sdk = SDK(
+        chainId=CHAIN_ID,
+        rpcUrl=RPC_URL,
+        subgraphOverrides={CHAIN_ID: SUBGRAPH_URL},
+    )
+    assert sdk.subgraph_client is not None
+    feedbacks = sdk.searchFeedback(agentId=AGENT_ID)
+    assert isinstance(feedbacks, list)
+    for fb in feedbacks:
+        # Feedback model has spec-aligned fields (mcpTool, a2aSkills, etc.); legacy fields removed
+        for attr in SPEC_FIELDS:
+            assert hasattr(fb, attr), f"Feedback missing spec field {attr}"
+
+
+@pytest.mark.skipif(not RUN_LIVE_SUBGRAPH, reason="RUN_LIVE_TESTS=1 or SUBGRAPH_URL required for live subgraph")
+def test_live_subgraph_get_reputation_summary_succeeds():
+    """Against live subgraph: getReputationSummary succeeds (no TypeError from first/skip)."""
+    from agent0_sdk import SDK
+    from tests.config import CHAIN_ID, RPC_URL, SUBGRAPH_URL, AGENT_ID
+
+    sdk = SDK(
+        chainId=CHAIN_ID,
+        rpcUrl=RPC_URL,
+        subgraphOverrides={CHAIN_ID: SUBGRAPH_URL},
+    )
+    result = sdk.getReputationSummary(AGENT_ID)
+    assert isinstance(result, dict)
+    assert result.get("agentId") == AGENT_ID
+    assert "count" in result
+    assert "averageValue" in result
