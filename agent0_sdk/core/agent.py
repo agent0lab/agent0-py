@@ -17,6 +17,7 @@ from .models import (
 from .web3_client import Web3Client
 from .endpoint_crawler import EndpointCrawler
 from .oasf_validator import validate_skill, validate_domain
+from .data_uri import encode_erc8004_json_data_uri
 
 if TYPE_CHECKING:
     from .sdk import SDK
@@ -197,6 +198,33 @@ class Agent:
     def registrationFile(self) -> RegistrationFile:
         """Get the compiled registration file."""
         return self.registration_file
+
+    def buildOnChainRegistrationUri(self) -> str:
+        """
+        Build an ERC-8004 registration file `data:` URI suitable for storing directly on-chain.
+        """
+        d = self.registration_file.to_dict(
+            chain_id=self.sdk.chain_id(),
+            identity_registry_address=self.sdk.identity_registry.address if self.sdk.identity_registry else None,
+        )
+        return encode_erc8004_json_data_uri(d)
+
+    def registerOnChain(self) -> TransactionHandle[RegistrationFile]:
+        """
+        Register or update this agent using a fully on-chain ERC-8004 registration file (data URI).
+        """
+        # Validate basic info
+        if not self.registration_file.name or not self.registration_file.description:
+            raise ValueError("Agent must have name and description before registration")
+
+        uri = self.buildOnChainRegistrationUri()
+        # Delegate to existing flow (submitted-by-default) for compatibility.
+        if self.registration_file.agentId:
+            updated = self.updateRegistration(agentURI=uri)
+            if isinstance(updated, TransactionHandle):
+                return updated
+            raise RuntimeError("Expected updateRegistration to return a TransactionHandle when agentURI is provided")
+        return self._registerWithUri(uri)
 
     def _collectMetadataForRegistration(self) -> List[Dict[str, Any]]:
         """Collect all metadata entries for registration.

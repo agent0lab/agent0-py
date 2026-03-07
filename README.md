@@ -16,6 +16,21 @@ Agent0 SDK enables you to:
 - **Cross-chain registration** - One-line registration with IPFS nodes, Pinata, Filecoin, or HTTP URIs
 - **Public indexing** - Subgraph indexing both on-chain and IPFS data for fast search and retrieval
 
+## Release (1.6.0)
+
+This release aligns feedback files with the deployed subgraph schema and removes legacy feedback fields.
+
+It also adds **fully on-chain agent registration files** per [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004), via `data:application/json;base64,...` `agentURI` (ERC-721 `tokenURI`):
+
+- **Read support**: `SDK.loadAgent()` auto-detects and decodes ERC-8004 JSON base64 `data:` URIs (tolerant of optional params like `;charset=utf-8`).
+- **Write support**: new `Agent.registerOnChain()` publishes the registration file fully on-chain by encoding it into a `data:` URI and writing it via `register(...)` / `setAgentURI(...)`.
+- **Safety**: `SDK.loadAgent()` enforces a max decoded size for `data:` URIs (default **256 KiB**). Override with `registrationDataUriMaxBytes`.
+- **Backwards compatible**: `registerIPFS()` and `register()` (HTTP/IPFS URIs) continue to work unchanged.
+
+For breaking changes and migration notes, see `release_notes/RELEASE_NOTES_1.6.0.md` (and prior notes in `release_notes/`).
+
+**Note on IPFS backends:** the TypeScript SDK added an embedded Helia option in v1.6 (`ipfs: 'helia'`). The Python SDK continues to use `ipfshttpclient` for `ipfs="node"` (connecting to a running Kubo daemon HTTP API).
+
 **Bug reports & feedback:** GitHub: [Report issues](https://github.com/agent0lab/agent0-py/issues) | Telegram: [Agent0 channel](https://t.me/agent0kitchen) | Email: team@ag0.xyz
 
 ## Installation
@@ -37,7 +52,7 @@ pip install agent0-sdk
 To install a specific version explicitly:
 
 ```bash
-pip install agent0-sdk==1.5.3
+pip install agent0-sdk==1.6.0
 ```
 
 ### Install from Source
@@ -61,7 +76,7 @@ sdk = SDK(
     chainId=11155111,  # Ethereum Sepolia testnet (use 1 for Ethereum Mainnet)
     rpcUrl=os.getenv("RPC_URL"),
     signer=os.getenv("PRIVATE_KEY"),
-    ipfs="pinata",  # Options: "pinata", "filecoinPin", "node"
+    ipfs="pinata",  # Options: "pinata", "filecoinPin", "node" (Kubo daemon)
     pinataJwt=os.getenv("PINATA_JWT")  # For Pinata
     # Subgraph URL auto-defaults from DEFAULT_SUBGRAPH_URLS
 )
@@ -111,6 +126,31 @@ wallet_tx = agent.setWallet(
 )
 if wallet_tx:
     wallet_tx.wait_confirmed(timeout=180)
+```
+
+### 2b. Fully on-chain registration (EIP-8004 `data:` URI)
+
+ERC-8004 allows storing the entire registration JSON **directly on-chain** by setting `agentURI`/`tokenURI` to a base64 JSON data URI (e.g. `data:application/json;base64,...`).
+
+```python
+# Register (or update) with a fully on-chain registration file (data URI)
+tx = agent.registerOnChain()
+reg = tx.wait_confirmed(timeout=180).result
+print(f"Agent URI (on-chain data): {reg.agentURI}")
+```
+
+Notes:
+
+- **Gas**: data URIs can be expensive; keep registration files compact.
+- **Size limit**: `SDK.loadAgent()` enforces a default max decoded size of **256 KiB** for data URIs. Override with:
+
+```python
+sdk = SDK(
+    chainId=11155111,
+    rpcUrl=os.getenv(\"RPC_URL\"),
+    signer=os.getenv(\"PRIVATE_KEY\"),
+    registrationDataUriMaxBytes=512 * 1024,
+)
 ```
 
 ### 3. Load and Edit Agent
@@ -169,9 +209,9 @@ feedback = tx.wait_confirmed(timeout=180).result
 
 # Rich feedback (optional off-chain file + on-chain fields)
 feedback_file = sdk.prepareFeedbackFile({
-    "capability": "tools",       # Optional: MCP capability
-    "name": "code_generation",   # Optional: MCP tool name
-    "skill": "python",           # Optional: A2A skill
+    "mcpTool": "code_generation",       # Spec-aligned MCP tool identifier
+    "a2aSkills": ["python"],            # Spec-aligned A2A skills
+    "a2aContextId": "session:abc",      # Optional
     "text": "Great agent!",      # Optional
 })
 
@@ -188,7 +228,7 @@ feedback = tx.wait_confirmed(timeout=180).result
 # Search feedback
 results = sdk.searchFeedback(
     agentId="11155111:123",
-    capabilities=["tools"],
+    capabilities=["code_generation"],  # capabilities filters by feedbackFile.mcpTool
     minValue=80,
     maxValue=100
 )

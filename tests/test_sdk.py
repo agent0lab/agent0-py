@@ -113,6 +113,17 @@ class TestSDK:
             assert agent.agentURI is None
             assert agent.owners == ["0x1234567890abcdef1234567890abcdef12345678"]
 
+    def test_sdk_init_accepts_registration_data_uri_max_bytes(self):
+        with patch('agent0_sdk.core.sdk.Web3Client') as mock_web3:
+            mock_web3.return_value.chain_id = 11155111
+            sdk = SDK(
+                chainId=11155111,
+                signer="0x1234567890abcdef",
+                rpcUrl="https://eth-sepolia.g.alchemy.com/v2/test",
+                registrationDataUriMaxBytes=1234,
+            )
+            assert sdk.registrationDataUriMaxBytes == 1234
+
 
 class TestAgent:
     """Test Agent class."""

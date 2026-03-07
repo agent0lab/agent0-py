@@ -40,6 +40,7 @@ from .models import (
     AgentSummary, Feedback, SearchFilters, SearchOptions, SearchFeedbackParams
 )
 from .web3_client import Web3Client
+from .data_uri import is_erc8004_json_data_uri, decode_erc8004_json_data_uri
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,8 @@ class AgentIndexer:
         """Detect URI type (ipfs, https, http, unknown)."""
         if uri.startswith("ipfs://"):
             return "ipfs"
+        elif uri.startswith("data:"):
+            return "data"
         elif uri.startswith("https://"):
             return "https"
         elif uri.startswith("http://"):
@@ -191,6 +194,16 @@ class AgentIndexer:
         """Fetch registration file from IPFS or HTTPS."""
         uri_type = self._detect_uri_type(uri)
         
+        if uri_type == "data":
+            if not is_erc8004_json_data_uri(uri):
+                logger.warning("Unsupported data URI for registration file (expected application/json;base64)")
+                return None
+            try:
+                return decode_erc8004_json_data_uri(uri)
+            except Exception as e:
+                logger.warning(f"Failed to decode data URI registration file: {e}")
+                return None
+
         if uri_type == "ipfs":
             # Normalize bare CID to ipfs:// format
             if not uri.startswith("ipfs://"):
@@ -1537,6 +1550,16 @@ class AgentIndexer:
         try:
             import json
             import requests
+
+            # ERC-8004 on-chain registration file (data URI)
+            if isinstance(token_uri, str) and token_uri.startswith("data:"):
+                if not is_erc8004_json_data_uri(token_uri):
+                    return None
+                try:
+                    return decode_erc8004_json_data_uri(token_uri)
+                except Exception as e:
+                    logger.warning(f"Could not decode data URI registration: {e}")
+                    return None
             
             # Extract IPFS hash from token URI
             if token_uri.startswith("ipfs://"):

@@ -291,7 +291,10 @@ def main():
                 agent_owner = owners[0] if isinstance(owners, list) and owners else 'N/A'
                 print(f"   {i}. {agent.get('name', 'N/A')} (ID: {agent_id})")
                 if isinstance(agent_owner, str):
-                print(f"      Owner: {agent_owner[:10]}...{agent_owner[-8:] if len(agent_owner) > 18 else agent_owner}")
+                    print(
+                        f"      Owner: {agent_owner[:10]}..."
+                        f"{agent_owner[-8:] if len(agent_owner) > 18 else agent_owner}"
+                    )
         else:
             print("⚠️  Test agent doesn't have owner information")
     except Exception as e:
