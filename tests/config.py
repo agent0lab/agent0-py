@@ -38,6 +38,14 @@ AGENT_ID = os.getenv("AGENT_ID", "11155111:46")
 # Client Private Key (for feedback tests - different wallet from agent)
 CLIENT_PRIVATE_KEY = os.getenv("CLIENT_PRIVATE_KEY", "")
 
+# Telemetry (for SDK integration tests; after running dashboard seed seed-telemetry-test-user.sql)
+AGENT0_API_KEY = os.getenv("AGENT0_API_KEY", "")
+AGENT0_TELEMETRY_ENDPOINT = os.getenv("AGENT0_TELEMETRY_ENDPOINT", "")
+
+# Supabase (for telemetry DB assertions; use local from supabase start)
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+
 
 def print_config():
     """Print current configuration (hiding sensitive values)."""
@@ -49,5 +57,9 @@ def print_config():
     print(f"  PINATA_JWT: {'***' if PINATA_JWT else 'NOT SET'}")
     print(f"  SUBGRAPH_URL: {SUBGRAPH_URL[:50]}...")
     print(f"  AGENT_ID: {AGENT_ID}")
+    print(f"  AGENT0_API_KEY: {'***' if AGENT0_API_KEY else 'NOT SET'}")
+    print(f"  AGENT0_TELEMETRY_ENDPOINT: {AGENT0_TELEMETRY_ENDPOINT or '(default)'}")
+    print(f"  SUPABASE_URL: {'***' if SUPABASE_URL else 'NOT SET'}")
+    print(f"  SUPABASE_SERVICE_ROLE_KEY: {'***' if SUPABASE_SERVICE_ROLE_KEY else 'NOT SET'}")
     print()
 
