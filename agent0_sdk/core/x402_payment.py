@@ -185,6 +185,9 @@ def build_evm_payment(
     scheme = accept.scheme or "exact"
     pay_to = to_addr
 
+    # Compact JSON to match TS JSON.stringify (no spaces); some servers are sensitive to payload shape.
+    _compact = {"separators": (",", ":")}
+
     if is_v2:
         accepted = {
             "scheme": scheme,
@@ -195,30 +198,30 @@ def build_evm_payment(
             "maxTimeoutSeconds": accept.get("maxTimeoutSeconds", 60),
         }
         if accept.extra:
-            accepted["extra"] = accept.extra
-        payload_v2 = {
-            "x402Version": 2,
-            "accepted": accepted,
-            "payload": {
-                "signature": signature,
-                "authorization": {
-                    "from": from_addr,
-                    "to": to_addr,
-                    "value": value,
-                    "validAfter": valid_after,
-                    "validBefore": valid_before,
-                    "nonce": nonce,
-                },
-            },
-            "extensions": {},
-        }
+            # Send only server-style extra (e.g. name, version); omit maxTimeoutSeconds so it's only at top level (match TS)
+            accepted["extra"] = {k: v for k, v in accept.extra.items() if k != "maxTimeoutSeconds"}
+        # Key order matches TS: x402Version, resource (if present), accepted, payload, extensions
+        payload_v2 = {"x402Version": 2}
         if snapshot and snapshot.resource:
             payload_v2["resource"] = {
                 "url": snapshot.resource.url,
                 "description": snapshot.resource.description,
                 "mimeType": snapshot.resource.mimeType,
             }
-        json_str = json.dumps(payload_v2)
+        payload_v2["accepted"] = accepted
+        payload_v2["payload"] = {
+            "signature": signature,
+            "authorization": {
+                "from": from_addr,
+                "to": to_addr,
+                "value": value,
+                "validAfter": valid_after,
+                "validBefore": valid_before,
+                "nonce": nonce,
+            },
+        }
+        payload_v2["extensions"] = {}
+        json_str = json.dumps(payload_v2, **_compact)
     else:
         payload = {
             "x402Version": 1,
@@ -236,6 +239,6 @@ def build_evm_payment(
                 },
             },
         }
-        json_str = json.dumps(payload)
+        json_str = json.dumps(payload, **_compact)
 
     return base64.b64encode(json_str.encode("utf-8")).decode("ascii")

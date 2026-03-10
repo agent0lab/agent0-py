@@ -6,15 +6,18 @@ x402 and A2A demo: three flows.
 2. Pure A2A: message, task ops, list_tasks, load_task via sdk.createA2AClient(agent_or_summary).
 3. A2A + 402: same as (2) when the A2A server returns 402; pay then continue.
 
-Loads env from .env (examples/.env or project root .env). Set PRIVATE_KEY, RPC_URL.
+Loads env from .env (examples/.env or project root .env). Set PRIVATE_KEY or AGENT_PRIVATE_KEY, RPC_URL.
+Use the same key as agent0-ts/examples so both demos use one wallet.
 Optional: CHAIN_ID (default 84532), AGENT_ID_PURE_A2A (default 84532:1298),
 AGENT_ID_A2A_X402 (default 84532:1301), BASE_MAINNET_RPC_URL, X402_DEMO_URL.
+Set X402_DEBUG=1 to print the exact payment payload and server response when debugging 402.
 Run: python examples/x402_a2a_demo.py
 """
 
 import os
 import json
 import sys
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
 # Add project root for imports when run as script
@@ -38,11 +41,23 @@ def _env(key: str, default: str = "") -> str:
     return os.environ.get(key, default).strip()
 
 
+def _json_serializable(obj):
+    """Convert result to JSON-serializable form (e.g. dataclass -> dict)."""
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return asdict(obj)
+    if isinstance(obj, dict):
+        return {k: _json_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_serializable(v) for v in obj]
+    return obj
+
+
 def main() -> None:
-    private_key = _env("PRIVATE_KEY")
+    # Same env vars as TS demo: PRIVATE_KEY or AGENT_PRIVATE_KEY so one .env works for both
+    private_key = _env("PRIVATE_KEY") or _env("AGENT_PRIVATE_KEY")
     rpc_url = _env("RPC_URL")
     if not private_key or not rpc_url:
-        print("Set PRIVATE_KEY and RPC_URL to run this demo.")
+        print("Set PRIVATE_KEY (or AGENT_PRIVATE_KEY) and RPC_URL to run this demo.")
         print("Optional: BASE_MAINNET_RPC_URL, OVERRIDE_RPC_URLS (JSON e.g. {\"1\": \"https://...\"})")
         return
 
@@ -53,7 +68,7 @@ def main() -> None:
         except json.JSONDecodeError:
             pass
     if _env("BASE_MAINNET_RPC_URL"):
-        override_rpc.setdefault(1, _env("BASE_MAINNET_RPC_URL"))
+        override_rpc[8453] = _env("BASE_MAINNET_RPC_URL")  # Base mainnet for x402 (match TS; optional override)
 
     chain_id = int(_env("CHAIN_ID", "84532"))
     sdk = SDK(
@@ -63,17 +78,36 @@ def main() -> None:
         overrideRpcUrls=override_rpc if override_rpc else None,
     )
 
+    wa = sdk.web3_client.account.address if sdk.web3_client.account else ""
+    print("WA", wa)
+
     # --- Flow 1: Pure x402 GET ---
-    print("Flow 1: x402 request")
+    # Default: same x402 API as TS (returns 402; pay with Base USDC). Use X402_DEMO_URL to override.
+    x402_url = os.environ.get(
+        "X402_DEMO_URL",
+        "https://twitter.x402.agentbox.fyi/search?q=from:elonmusk+AI&type=Latest&limit=5",
+    )
+    print("\n--- 1. Pure x402 ---")
     try:
-        result = sdk.request({
-            "url": os.environ.get("X402_DEMO_URL", "https://httpbin.org/get"),
-            "method": "GET",
-            "headers": {},
-        })
-        print("  Result (2xx):", type(result).__name__, "keys" if isinstance(result, dict) else str(result)[:80])
+        if os.environ.get("X402_DEBUG"):
+            print("  [X402_DEBUG is set; payment payload and server response will be printed]")
+        print("  Sending GET request...")
+        result = sdk.request({"url": x402_url, "method": "GET", "headers": {}})
         if getattr(result, "x402Required", False):
-            print("  402: pay options available:", result.x402Payment and len(result.x402Payment.accepts))
+            n = len(result.x402Payment.accepts) if result.x402Payment else 0
+            print("  Server returned 402 Payment Required.")
+            print("  Payment options:", n, "accept(s). Building payment and retrying request...")
+            try:
+                paid = result.x402Payment.pay()
+                print("  Request succeeded after payment.")
+                print(json.dumps(_json_serializable(paid), indent=2))
+            except Exception as pay_err:
+                print("  Error:", pay_err)
+                if "402 again" in str(pay_err):
+                    print("  Hint: Server rejected the payment (e.g. wallet may need USDC on Base, or check server requirements).")
+                    print("  Run with X402_DEBUG=1 to see the exact payload sent and server response.")
+        else:
+            print("  Request succeeded (2xx). Result:", type(result).__name__, "keys" if isinstance(result, dict) else str(result)[:80])
     except Exception as e:
         print("  Error:", e)
 
@@ -81,25 +115,34 @@ def main() -> None:
     agent_id_pure = _env("AGENT_ID_PURE_A2A", "84532:1298")
     print("\n--- 2. Pure A2A ---")
     try:
+        print("  Loading agent", agent_id_pure, "...")
         agent = sdk.loadAgent(agent_id_pure)
         client = sdk.createA2AClient(agent)
+        print("  Sending message...")
         out = client.messageA2A("Hello, this is a demo message.")
-        print("  messageA2A:", type(out).__name__)
         if getattr(out, "x402Required", False):
-            print("  402: payment required; use out.x402Payment.pay() then retry.")
-        elif hasattr(out, "task") and out.task:
-            task = out.task
-            print("  task.query():", type(task.query()).__name__)
-            task.message("Follow-up message.")
-            print("  task.cancel(): ok")
+            print("  Server returned 402 Payment Required (this agent can charge; see Flow 3).")
+        else:
+            print("  messageA2A response:", type(out).__name__)
+            if hasattr(out, "task") and out.task:
+                task = out.task
+                print("  Querying task...")
+                task.query()
+                print("  Sending follow-up message, then cancelling task...")
+                task.message("Follow-up message.")
+                task.cancel()
+                print("  Task cancelled.")
+        print("  Listing tasks...")
         tasks = client.listTasks()
         if getattr(tasks, "x402Required", False):
-            print("  listTasks: 402 payment required")
+            print("  listTasks returned 402 Payment Required.")
         else:
             print("  listTasks: count =", len(tasks) if isinstance(tasks, list) else 0)
             if isinstance(tasks, list) and tasks:
+                print("  Loading first task and querying...")
                 loaded = client.loadTask(tasks[0].taskId)
                 if not getattr(loaded, "x402Required", False):
+                    loaded.query()
                     print("  loadTask + query(): ok")
     except Exception as e:
         print("  Error:", e)
@@ -108,14 +151,24 @@ def main() -> None:
     agent_id_x402 = _env("AGENT_ID_A2A_X402", "84532:1301")
     print("\n--- 3. A2A with x402 ---")
     try:
+        print("  Loading agent", agent_id_x402, "(this agent requires payment)...")
         agent = sdk.loadAgent(agent_id_x402)
         client = sdk.createA2AClient(agent)
+        print("  Sending message...")
         result = client.messageA2A("Hello, please charge me once.")
         if getattr(result, "x402Required", False):
-            paid = result.x402Payment.pay()
-            print("  Paid; result:", type(paid).__name__)
+            n = len(result.x402Payment.accepts) if result.x402Payment else 0
+            print("  Server returned 402 Payment Required.")
+            print("  Payment options:", n, "accept(s). Building payment and retrying...")
+            try:
+                paid = result.x402Payment.pay()
+                print("  Request succeeded after payment. Result:", type(paid).__name__)
+            except Exception as pay_err:
+                print("  Error:", pay_err)
+                if "402 again" in str(pay_err):
+                    print("  Hint: Server rejected the payment (e.g. wallet may need sufficient balance on the payment chain).")
         else:
-            print("  messageA2A:", type(result).__name__)
+            print("  messageA2A response (2xx):", type(result).__name__)
     except Exception as e:
         print("  Error:", e)
 

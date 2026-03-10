@@ -153,6 +153,13 @@ def _normalize_accept_entry(entry: Dict[str, Any]) -> X402Accept:
         pr = entry
     price = str(pr.get("price") or pr.get("amount") or pr.get("maxAmountRequired") or "0")
     token = str(pr.get("token") or pr.get("asset") or "")
+    # Match TS: extra = only the server's "extra" field (e.g. { name, version }), not the whole entry
+    extra_raw = pr.get("extra") or entry.get("extra")
+    extra = dict(extra_raw) if isinstance(extra_raw, dict) else {}
+    # Preserve maxTimeoutSeconds so accept.get("maxTimeoutSeconds", 60) returns server value (TS has it from ...entry)
+    for key in ("maxTimeoutSeconds",):
+        if (pr.get(key) is not None) or (entry.get(key) is not None):
+            extra[key] = pr.get(key) if pr.get(key) is not None else entry.get(key)
     return X402Accept(
         price=price,
         token=token,
@@ -162,7 +169,7 @@ def _normalize_accept_entry(entry: Dict[str, Any]) -> X402Accept:
         maxAmountRequired=pr.get("maxAmountRequired"),
         destination=pr.get("destination") or pr.get("payTo"),
         asset=pr.get("asset"),
-        extra=dict(entry),
+        extra=extra,
     )
 
 

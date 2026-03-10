@@ -5,6 +5,9 @@ Mirrors agent0-ts src/core/x402-request.ts. Uses sync requests.
 
 from __future__ import annotations
 
+import base64
+import json
+import os
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from .x402_types import (
@@ -147,6 +150,19 @@ def request_with_x402(
             payment_header_name = "Authorization" if response_from_www_authenticate else ("X-PAYMENT" if x402_version == 1 else "PAYMENT-SIGNATURE")
             payment_header_value = f"x402 {payload}" if response_from_www_authenticate else payload
 
+            if os.environ.get("X402_DEBUG"):
+                print("[X402_DEBUG] accept: network=%r token=%r destination=%r price=%r x402Version=%s" % (
+                    getattr(chosen, "network", None), getattr(chosen, "token", None),
+                    getattr(chosen, "destination", None), getattr(chosen, "price", None), x402_version))
+                print("[X402_DEBUG] payment header name: %s" % (payment_header_name,))
+                try:
+                    decoded = base64.b64decode(payload).decode("utf-8")
+                    obj = json.loads(decoded)
+                    print("[X402_DEBUG] payload (decoded JSON):")
+                    print(json.dumps(obj, indent=2))
+                except Exception as e:
+                    print("[X402_DEBUG] payload decode failed: %s" % (e,))
+
             def try_url(request_url: str, use_auth_header: bool = True) -> Any:
                 if response_from_www_authenticate and not use_auth_header:
                     return do_fetch(payment_payload=payload, payment_header_name="PAYMENT-SIGNATURE", request_url=request_url)
@@ -163,6 +179,9 @@ def request_with_x402(
                     err_body = getattr(retry_response, "text", "") or (retry_response.content.decode("utf-8") if getattr(retry_response, "content", None) else "(failed to read body)")
                 except Exception:
                     err_body = "(failed to read body)"
+                if os.environ.get("X402_DEBUG"):
+                    print("[X402_DEBUG] retry response status: %s" % (retry_status,))
+                    print("[X402_DEBUG] retry response body: %s" % (err_body[:2000] if err_body else "(empty)"))
                 msg = "x402: payment rejected or insufficient (server returned 402 again)" if retry_status == 402 else f"x402: retry failed with HTTP {retry_status}"
                 err = RuntimeError(msg)
                 err.status = retry_status  # type: ignore
