@@ -3,7 +3,7 @@
 x402 and A2A demo: three flows.
 
 1. Pure x402: GET a paid resource with sdk.request() and optional pay.
-2. Pure A2A: message, task ops, list_tasks, load_task via sdk.createA2AClient(agent_or_summary).
+2. Pure A2A: message, task ops, list_tasks, load_task on loaded agent; use sdk.createA2AClient(summary) when you only have an AgentSummary.
 3. A2A + 402: same as (2) when the A2A server returns 402; pay then continue.
 
 Loads env from .env (examples/.env or project root .env). Set PRIVATE_KEY or AGENT_PRIVATE_KEY, RPC_URL.
@@ -117,9 +117,8 @@ def main() -> None:
     try:
         print("  Loading agent", agent_id_pure, "...")
         agent = sdk.loadAgent(agent_id_pure)
-        client = sdk.createA2AClient(agent)
         print("  Sending message...")
-        out = client.messageA2A("Hello, this is a demo message.")
+        out = agent.messageA2A("Hello, this is a demo message.")
         if getattr(out, "x402Required", False):
             print("  Server returned 402 Payment Required (this agent can charge; see Flow 3).")
         else:
@@ -133,14 +132,14 @@ def main() -> None:
                 task.cancel()
                 print("  Task cancelled.")
         print("  Listing tasks...")
-        tasks = client.listTasks()
+        tasks = agent.listTasks()
         if getattr(tasks, "x402Required", False):
             print("  listTasks returned 402 Payment Required.")
         else:
             print("  listTasks: count =", len(tasks) if isinstance(tasks, list) else 0)
             if isinstance(tasks, list) and tasks:
                 print("  Loading first task and querying...")
-                loaded = client.loadTask(tasks[0].taskId)
+                loaded = agent.loadTask(tasks[0].taskId)
                 if not getattr(loaded, "x402Required", False):
                     loaded.query()
                     print("  loadTask + query(): ok")
@@ -153,9 +152,8 @@ def main() -> None:
     try:
         print("  Loading agent", agent_id_x402, "(this agent requires payment)...")
         agent = sdk.loadAgent(agent_id_x402)
-        client = sdk.createA2AClient(agent)
         print("  Sending message...")
-        result = client.messageA2A("Hello, please charge me once.")
+        result = agent.messageA2A("Hello, please charge me once.")
         if getattr(result, "x402Required", False):
             n = len(result.x402Payment.accepts) if result.x402Payment else 0
             print("  Server returned 402 Payment Required.")
