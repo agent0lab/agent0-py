@@ -511,6 +511,26 @@ VALIDATION_REGISTRY_ABI = [
     }
 ]
 
+# ERC-20 minimal ABIs for x402 (EIP-3009 token name, version, balanceOf)
+ERC20_NAME_ABI: List[Dict[str, Any]] = [
+    {"inputs": [], "name": "name", "outputs": [{"internalType": "string", "name": "", "type": "string"}], "stateMutability": "view", "type": "function"},
+]
+ERC20_VERSION_ABI: List[Dict[str, Any]] = [
+    {"inputs": [], "name": "version", "outputs": [{"internalType": "string", "name": "", "type": "string"}], "stateMutability": "view", "type": "function"},
+]
+ERC20_BALANCE_OF_ABI: List[Dict[str, Any]] = [
+    {"inputs": [{"internalType": "address", "name": "account", "type": "address"}], "name": "balanceOf", "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"},
+]
+
+# Default RPC URLs for different chains (used for x402 and multichain loadAgent)
+DEFAULT_RPC_URLS: Dict[int, str] = {
+    1: "https://eth.llamarpc.com",
+    137: "https://polygon-rpc.com",
+    8453: "https://mainnet.base.org",
+    11155111: "https://rpc.sepolia.org",
+    84532: "https://base-sepolia.drpc.org",
+}
+
 # Contract registry for different chains
 # Updated addresses from: https://github.com/erc-8004/erc-8004-contracts
 DEFAULT_REGISTRIES: Dict[int, Dict[str, str]] = {

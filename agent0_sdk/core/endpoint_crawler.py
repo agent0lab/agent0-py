@@ -219,9 +219,21 @@ class EndpointCrawler:
                         # Extract skill tags from agentcard
                         skills = self._extract_a2a_skills(data)
 
+                        result = {}
                         if skills:
-                            logger.info(f"Successfully fetched A2A capabilities from {agentcard_url}: {len(skills)} skills")
-                            return {'a2aSkills': skills}
+                            result['a2aSkills'] = skills
+                        # Include auth from card so A2A client can apply credential (plan: endpoint_crawler securitySchemes)
+                        if data.get('securitySchemes') is not None:
+                            result['securitySchemes'] = data['securitySchemes']
+                        if data.get('security') is not None:
+                            result['security'] = data['security']
+
+                        if result:
+                            logger.info(
+                                f"Successfully fetched A2A capabilities from {agentcard_url}"
+                                + (f": {len(skills)} skills" if skills else "") + (" (auth present)" if result.get('securitySchemes') or result.get('security') else "")
+                            )
+                            return result
                 except requests.exceptions.RequestException as e:
                     # Try next URL
                     logger.debug(f"Failed to fetch from {agentcard_url}: {e}")

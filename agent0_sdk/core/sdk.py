@@ -22,14 +22,19 @@ from .models import (
 from .web3_client import Web3Client
 from .contracts import (
     IDENTITY_REGISTRY_ABI, REPUTATION_REGISTRY_ABI, VALIDATION_REGISTRY_ABI,
-    DEFAULT_REGISTRIES, DEFAULT_SUBGRAPH_URLS
+    DEFAULT_REGISTRIES, DEFAULT_SUBGRAPH_URLS, DEFAULT_RPC_URLS,
 )
 from .agent import Agent
 from .indexer import AgentIndexer
+from .a2a_summary_client import A2AClientFromSummary
 from .ipfs_client import IPFSClient
 from .feedback_manager import FeedbackManager
 from .transaction_handle import TransactionHandle
 from .subgraph_client import SubgraphClient
+
+from .x402_types import X402Accept, RequestSnapshot
+from .x402_request import request_with_x402, X402RequestDeps
+from .x402_payment import build_evm_payment, check_evm_balance
 
 
 class SDK:
@@ -54,11 +59,29 @@ class SDK:
         # Subgraph configuration
         subgraphOverrides: Optional[Dict[ChainId, str]] = None,  # Override subgraph URLs per chain
         registrationDataUriMaxBytes: int = 256 * 1024,
+        # RPC overrides for multichain (x402 payments and loadAgent on other chains)
+        overrideRpcUrls: Optional[Dict[int, str]] = None,
     ):
         """Initialize the SDK."""
         self.chainId = chainId
         self.rpcUrl = rpcUrl
         self.signer = signer
+
+        # RPC URL map: defaults -> rpcUrl for primary -> overrideRpcUrls
+        self._rpc_urls = dict(DEFAULT_RPC_URLS) if DEFAULT_RPC_URLS else {}
+        if rpcUrl and str(rpcUrl).strip():
+            self._rpc_urls[chainId] = rpcUrl.strip()
+        if overrideRpcUrls:
+            for cid, url in overrideRpcUrls.items():
+                if url and str(url).strip():
+                    self._rpc_urls[int(cid)] = url.strip()
+        if chainId not in self._rpc_urls or not self._rpc_urls[chainId]:
+            raise ValueError(
+                f"No RPC URL for chain {chainId}. Provide rpcUrl or add the chain to overrideRpcUrls in SDK config."
+            )
+        # Caches for per-chain Web3 clients (payment and read-only)
+        self._payment_chain_clients: Dict[int, Web3Client] = {}
+        self._read_only_chain_clients: Dict[int, Web3Client] = {}
         
         # Initialize Web3 client (with or without signer for read-only operations)
         if signer:
@@ -267,6 +290,101 @@ class SDK:
         self._reputation_registry = None
         self._validation_registry = None
 
+    def get_web3_client_for_accept(self, accept: Any) -> Web3Client:
+        """Return Web3Client for the chain indicated by accept network (for x402 payment)."""
+        raw = accept.get("network") if isinstance(accept, dict) else getattr(accept, "network", None)
+        if raw is None:
+            raw = str(self.chainId)
+        raw = str(raw)
+        import re
+        m = re.match(r"^eip155:(\d+)$", raw)
+        chain_id = int(m.group(1)) if m else int(raw)
+        if chain_id == self.chainId:
+            return self.web3_client
+        if chain_id in self._payment_chain_clients:
+            return self._payment_chain_clients[chain_id]
+        rpc_url = self._rpc_urls.get(chain_id)
+        if not rpc_url or not str(rpc_url).strip():
+            raise ValueError(
+                f"x402: payment option requires chain {chain_id} but SDK is configured for chain {self.chainId}. "
+                f"Add overrideRpcUrls={{ {chain_id}: 'https://...' }} to SDK config to pay on that chain."
+            )
+        if not self.signer:
+            raise ValueError("x402: signer required to build payment on another chain")
+        if isinstance(self.signer, str):
+            client = Web3Client(rpc_url.strip(), private_key=self.signer)
+        else:
+            client = Web3Client(rpc_url.strip(), account=self.signer)
+        self._payment_chain_clients[chain_id] = client
+        return client
+
+    def get_web3_client_for_chain(self, chain_id: int) -> Web3Client:
+        """Return Web3Client for the given chain (for reads, e.g. loadAgent on another chain)."""
+        if chain_id == self.chainId:
+            return self.web3_client
+        if chain_id in self._read_only_chain_clients:
+            return self._read_only_chain_clients[chain_id]
+        rpc_url = self._rpc_urls.get(chain_id)
+        if not rpc_url or not str(rpc_url).strip():
+            raise ValueError(
+                f"To load agents from chain {chain_id}, add overrideRpcUrls={{ {chain_id}: 'https://...' }} to SDK config."
+            )
+        client = Web3Client(rpc_url.strip())
+        self._read_only_chain_clients[chain_id] = client
+        return client
+
+    def get_identity_registry_address_for_chain(self, chain_id: int) -> Address:
+        """Return identity registry address for the given chain."""
+        regs = DEFAULT_REGISTRIES.get(chain_id, {})
+        addr = regs.get("IDENTITY")
+        if not addr:
+            raise ValueError(f"No identity registry address for chain {chain_id}")
+        return addr
+
+    def _x402_fetch(
+        self,
+        url: str,
+        method: str,
+        headers: Dict[str, str],
+        body: Optional[Any],
+        payment_header_name: Optional[str] = None,
+        payment_payload: Optional[str] = None,
+    ) -> Any:
+        """Internal fetch for x402 requests (uses requests)."""
+        import requests
+        h = dict(headers)
+        if payment_payload is not None:
+            header_name = payment_header_name or "PAYMENT-SIGNATURE"
+            h[header_name] = payment_payload
+        return requests.request(method, url, headers=h, data=body)
+
+    def request(self, options: Dict[str, Any]) -> Any:
+        """HTTP request with x402 handling. On 402 returns X402RequiredResponse with pay/pay_first."""
+        return request_with_x402(options, self.get_x402_request_deps())
+
+    def fetch_with_x402(self, options: Dict[str, Any]) -> Any:
+        """Alias for request() for x402-specific usage."""
+        return self.request(options)
+
+    def get_x402_request_deps(self) -> X402RequestDeps:
+        """Return deps for x402-aware requests (fetch, build_payment, check_balance)."""
+        return X402RequestDeps(
+            fetch=self._x402_fetch,
+            build_payment=lambda accept, snapshot: build_evm_payment(
+                accept, self.get_web3_client_for_accept(accept), snapshot
+            ),
+            check_balance=lambda accept: check_evm_balance(accept, self.get_web3_client_for_accept(accept)),
+        )
+
+    def createA2AClient(
+        self,
+        agent_or_summary: Union[Agent, AgentSummary],
+    ) -> Union[Agent, A2AClientFromSummary]:
+        """Return an A2A client: Agent as-is, AgentSummary wrapped in A2AClientFromSummary."""
+        if isinstance(agent_or_summary, Agent):
+            return agent_or_summary
+        return A2AClientFromSummary(self, agent_or_summary)
+
     # Agent lifecycle methods
     def createAgent(
         self,
@@ -287,31 +405,32 @@ class SDK:
 
     def loadAgent(self, agentId: AgentId) -> Agent:
         """Load an existing agent (hydrates from registration file if registered).
-        
-        Note: Agents can be minted with an empty token URI (e.g. IPFS flow where publish fails).
-        In that case we return a partially-hydrated Agent with an empty registration file so the
-        caller can resume publishing and set the URI later.
+        Supports loading agents from any chain when overrideRpcUrls includes that chain.
         """
-        # Convert agentId to string if it's an integer
         agentId = str(agentId)
-        
-        # Parse agent ID
+
         if ":" in agentId:
-            chain_id, token_id = agentId.split(":", 1)
-            if int(chain_id) != self.chainId:
-                raise ValueError(f"Agent {agentId} is not on current chain {self.chainId}")
+            chain_id_str, token_id = agentId.split(":", 1)
+            chain_id = int(chain_id_str)
         else:
+            chain_id = self.chainId
             token_id = agentId
-        
-        # Get token URI from contract
+
+        token_id_int = int(token_id)
+
+        if chain_id == self.chainId:
+            web3_client = self.web3_client
+            identity_registry = self.identity_registry
+        else:
+            web3_client = self.get_web3_client_for_chain(chain_id)
+            registry_address = self.get_identity_registry_address_for_chain(chain_id)
+            identity_registry = web3_client.get_contract(registry_address, IDENTITY_REGISTRY_ABI)
+
         try:
-            agent_uri = self.web3_client.call_contract(
-                self.identity_registry, "tokenURI", int(token_id)  # tokenURI is ERC-721 standard, but represents agentURI
-            )
+            agent_uri = web3_client.call_contract(identity_registry, "tokenURI", token_id_int)
         except Exception as e:
             raise ValueError(f"Failed to load agent {agentId}: {e}")
-        
-        # Load registration file (or fall back to a minimal file if agent URI is missing)
+
         registration_file = self._load_registration_file(agent_uri)
         registration_file.agentId = agentId
         registration_file.agentURI = agent_uri if agent_uri else None
@@ -321,16 +440,14 @@ class SDK:
                 f"Agent {agentId} has no agentURI set on-chain yet. "
                 "Returning a partial agent; update info and call registerIPFS() to publish and set URI."
             )
-        
-        # Store registry address for proper JSON generation
-        registry_address = self._registries.get("IDENTITY")
+
+        registry_address = self._registries.get("IDENTITY") if chain_id == self.chainId else self.get_identity_registry_address_for_chain(chain_id)
         if registry_address:
             registration_file._registry_address = registry_address
-            registration_file._chain_id = self.chainId
-        
-        # Hydrate on-chain data
-        self._hydrate_agent_data(registration_file, int(token_id))
-        
+            registration_file._chain_id = chain_id
+
+        self._hydrate_agent_data(registration_file, token_id_int, web3_client=web3_client, identity_registry=identity_registry)
+
         return Agent(sdk=self, registration_file=registration_file)
 
     def _load_registration_file(self, uri: str) -> RegistrationFile:
@@ -350,9 +467,28 @@ class SDK:
             )
 
         if uri.startswith("ipfs://"):
-            if not self.ipfs_client:
-                raise ValueError("IPFS client not configured")
-            content = self.ipfs_client.get(uri)
+            cid = uri[7:].strip()
+            if self.ipfs_client:
+                content = self.ipfs_client.get(uri)
+            else:
+                # Fallback to public HTTP gateways (same as TS: no IPFS client required for loadAgent)
+                import requests
+                IPFS_GATEWAYS = [
+                    "https://gateway.pinata.cloud/ipfs/",
+                    "https://ipfs.io/ipfs/",
+                    "https://dweb.link/ipfs/",
+                ]
+                content = None
+                for gateway in IPFS_GATEWAYS:
+                    try:
+                        r = requests.get(f"{gateway}{cid}", timeout=10)
+                        if r.ok:
+                            content = r.text
+                            break
+                    except Exception:
+                        continue
+                if content is None:
+                    raise ValueError("Failed to retrieve data from all IPFS gateways")
         elif uri.startswith("http"):
             try:
                 import requests
@@ -367,12 +503,17 @@ class SDK:
         data = json.loads(content)
         return RegistrationFile.from_dict(data)
 
-    def _hydrate_agent_data(self, registration_file: RegistrationFile, token_id: int):
+    def _hydrate_agent_data(
+        self,
+        registration_file: RegistrationFile,
+        token_id: int,
+        web3_client: Optional[Any] = None,
+        identity_registry: Optional[Any] = None,
+    ):
         """Hydrate agent data from on-chain sources."""
-        # Get owner
-        owner = self.web3_client.call_contract(
-            self.identity_registry, "ownerOf", token_id
-        )
+        w3 = web3_client or self.web3_client
+        identity_reg = identity_registry or self.identity_registry
+        owner = w3.call_contract(identity_reg, "ownerOf", token_id)
         registration_file.owners = [owner]
         
         # Get operators (this would require additional contract calls)
@@ -383,22 +524,20 @@ class SDK:
         agent_id = token_id
         try:
             # Get agentWallet using the new dedicated function
-            wallet_address = self.web3_client.call_contract(
-                self.identity_registry, "getAgentWallet", agent_id
+            wallet_address = w3.call_contract(
+                identity_reg, "getAgentWallet", agent_id
             )
             if wallet_address and wallet_address != "0x0000000000000000000000000000000000000000":
                 registration_file.walletAddress = wallet_address
-                # If wallet is read from on-chain, use current chain ID
-                # (the chain ID from the registration file might be outdated)
-                registration_file.walletChainId = self.chainId
+                registration_file.walletChainId = getattr(registration_file, "_chain_id", None) or self.chainId
         except Exception as e:
             # No on-chain wallet set, will fall back to registration file
             pass
         
         try:
             # Try to get agentName (ENS) from on-chain metadata
-            name_bytes = self.web3_client.call_contract(
-                self.identity_registry, "getMetadata", agent_id, "agentName"
+            name_bytes = w3.call_contract(
+                identity_reg, "getMetadata", agent_id, "agentName"
             )
             if name_bytes and len(name_bytes) > 0:
                 ens_name = name_bytes.decode('utf-8')
@@ -432,8 +571,8 @@ class SDK:
         
         for key in keys_to_check:
             try:
-                value_bytes = self.web3_client.call_contract(
-                    self.identity_registry, "getMetadata", agent_id, key
+                value_bytes = w3.call_contract(
+                    identity_reg, "getMetadata", agent_id, key
                 )
                 if value_bytes and len(value_bytes) > 0:
                     value_str = value_bytes.decode('utf-8')

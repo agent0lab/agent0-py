@@ -25,6 +25,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 from .transaction_handle import TransactionHandle
+from .a2a import (
+    MessageResponse,
+    TaskResponse,
+    TaskSummary,
+    AgentTask,
+    MessageA2AOptions,
+    ListTasksOptions,
+    LoadTaskOptions,
+    A2APaymentRequired,
+)
+from .a2a_client import (
+    resolve_a2a_from_endpoint_url,
+    send_message,
+    list_tasks,
+    get_task,
+    create_task_handle,
+    apply_credential,
+)
 
 
 class Agent:
@@ -40,6 +58,8 @@ class Agent:
         self._last_registered_ens = None
         # Initialize endpoint crawler for fetching capabilities
         self._endpoint_crawler = EndpointCrawler(timeout=5)
+        # Lazy A2A resolution cache (baseUrl, a2aVersion, binding, tenant, auth)
+        self._cached_a2a: Optional[Dict[str, Any]] = None
 
     # Read-only properties for direct access
     @property
@@ -155,6 +175,141 @@ class Agent:
                 return endpoint.value
         return None
 
+    def _ensure_a2a_resolved(self) -> Dict[str, Any]:
+        """Resolve A2A interface from agent card (lazy, cached)."""
+        if self._cached_a2a is not None:
+            return self._cached_a2a
+        url = self.a2aEndpoint
+        if not url or not (str(url).startswith("http://") or str(url).startswith("https://")):
+            raise RuntimeError("Agent has no A2A endpoint; call setA2A first")
+        self._cached_a2a = resolve_a2a_from_endpoint_url(str(url))
+        return self._cached_a2a
+
+    def messageA2A(
+        self,
+        content: Union[str, Dict[str, Any]],
+        options: Optional[MessageA2AOptions] = None,
+    ) -> Union[MessageResponse, TaskResponse, A2APaymentRequired]:
+        """Send a message to this agent via A2A. Returns message/task response or 402 payment required."""
+        resolved = self._ensure_a2a_resolved()
+        x402_deps = self.sdk.get_x402_request_deps()
+        return send_message(
+            resolved["baseUrl"],
+            resolved["a2aVersion"],
+            content,
+            options=options,
+            auth=resolved.get("auth"),
+            tenant=resolved.get("tenant"),
+            binding=resolved.get("binding"),
+            x402_deps=x402_deps,
+        )
+
+    def listTasks(
+        self,
+        options: Optional[ListTasksOptions] = None,
+    ) -> Union[List[TaskSummary], A2APaymentRequired]:
+        """List tasks for this agent's A2A endpoint."""
+        resolved = self._ensure_a2a_resolved()
+        x402_deps = self.sdk.get_x402_request_deps()
+        auth_dict: Dict[str, Any] = (
+            apply_credential((options.credential or "") if options else "", resolved["auth"])
+            if resolved.get("auth")
+            else {"headers": {}, "queryParams": {}}
+        )
+        return list_tasks(
+            resolved["baseUrl"],
+            resolved["a2aVersion"],
+            options=options,
+            auth=auth_dict,
+            tenant=resolved.get("tenant"),
+            x402_deps=x402_deps,
+        )
+
+    def loadTask(
+        self,
+        task_id: str,
+        options: Optional[LoadTaskOptions] = None,
+    ) -> Union[AgentTask, A2APaymentRequired]:
+        """Load a task by ID from this agent's A2A endpoint. On 402, pay/pay_first return AgentTask after payment."""
+        resolved = self._ensure_a2a_resolved()
+        x402_deps = self.sdk.get_x402_request_deps()
+        auth_dict: Dict[str, Any] = (
+            apply_credential((options.credential or "") if options else "", resolved["auth"])
+            if resolved.get("auth")
+            else {"headers": {}, "queryParams": {}}
+        )
+        result = get_task(
+            resolved["baseUrl"],
+            resolved["a2aVersion"],
+            task_id,
+            auth=auth_dict,
+            x402_deps=x402_deps,
+            payment=options.payment if options else None,
+            tenant=resolved.get("tenant"),
+        )
+        from .x402_types import X402Payment
+        if getattr(result, "x402Required", False):
+            x402_payment = result.x402Payment
+            def pay_wrapper(accept: Any = None) -> AgentTask:
+                summary_result = x402_payment.pay(accept)
+                tid = getattr(summary_result, "taskId", None) or (summary_result.get("taskId") if isinstance(summary_result, dict) else None)
+                cid = getattr(summary_result, "contextId", None) or (summary_result.get("contextId") if isinstance(summary_result, dict) else "")
+                if not tid:
+                    raise RuntimeError("x402 pay() did not return taskId")
+                return create_task_handle(
+                    resolved["baseUrl"],
+                    resolved["a2aVersion"],
+                    str(tid),
+                    str(cid or ""),
+                    x402_deps,
+                    auth_dict,
+                    resolved.get("tenant"),
+                    None,
+                )
+            def pay_first_wrapper() -> AgentTask:
+                if not x402_payment.pay_first:
+                    raise ValueError("x402: no pay_first available")
+                summary_result = x402_payment.pay_first()
+                tid = getattr(summary_result, "taskId", None) or (summary_result.get("taskId") if isinstance(summary_result, dict) else None)
+                cid = getattr(summary_result, "contextId", None) or (summary_result.get("contextId") if isinstance(summary_result, dict) else "")
+                if not tid:
+                    raise RuntimeError("x402 pay_first() did not return taskId")
+                return create_task_handle(
+                    resolved["baseUrl"],
+                    resolved["a2aVersion"],
+                    str(tid),
+                    str(cid or ""),
+                    x402_deps,
+                    auth_dict,
+                    resolved.get("tenant"),
+                    None,
+                )
+            wrapped = X402Payment(
+                accepts=x402_payment.accepts,
+                pay=pay_wrapper,
+                x402Version=x402_payment.x402Version,
+                error=x402_payment.error,
+                resource=x402_payment.resource,
+                price=x402_payment.price,
+                token=x402_payment.token,
+                network=x402_payment.network,
+                pay_first=pay_first_wrapper if x402_payment.pay_first else None,
+            )
+            return A2APaymentRequired(x402Required=True, x402Payment=wrapped)
+        summary = result
+        tid = getattr(summary, "taskId", None) or (summary.get("taskId") if isinstance(summary, dict) else task_id)
+        cid = getattr(summary, "contextId", None) or (summary.get("contextId") if isinstance(summary, dict) else "")
+        return create_task_handle(
+            resolved["baseUrl"],
+            resolved["a2aVersion"],
+            str(tid),
+            str(cid or ""),
+            x402_deps,
+            auth_dict,
+            resolved.get("tenant"),
+            None,
+        )
+
     @property
     def ensEndpoint(self) -> Optional[str]:
         """Get ENS endpoint value (read-only)."""
@@ -162,7 +317,7 @@ class Agent:
             if endpoint.type == EndpointType.ENS:
                 return endpoint.value
         return None
-    
+
     @property
     def mcpTools(self) -> Optional[List[str]]:
         """Get MCP tools list (read-only)."""

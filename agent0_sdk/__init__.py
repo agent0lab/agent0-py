@@ -27,12 +27,42 @@ try:
     from .core.sdk import SDK
     from .core.agent import Agent
     from .core.transaction_handle import TransactionHandle, TransactionMined
+    from .core.x402_types import X402Payment, X402RequiredResponse, is_x402_required
+    from .core.a2a import (
+        Part,
+        MessageResponse,
+        TaskResponse,
+        TaskSummary,
+        TaskState,
+        AgentTask,
+        A2APaymentRequired,
+        MessageA2AOptions,
+        ListTasksOptions,
+        LoadTaskOptions,
+        AgentCardAuth,
+    )
+    from .core.a2a_summary_client import A2AClientFromSummary
     _sdk_available = True
 except ImportError:
     SDK = None
     Agent = None
     TransactionHandle = None
     TransactionMined = None
+    X402Payment = None
+    X402RequiredResponse = None
+    is_x402_required = None
+    Part = None
+    MessageResponse = None
+    TaskResponse = None
+    TaskSummary = None
+    TaskState = None
+    AgentTask = None
+    A2APaymentRequired = None
+    MessageA2AOptions = None
+    ListTasksOptions = None
+    LoadTaskOptions = None
+    AgentCardAuth = None
+    A2AClientFromSummary = None
     _sdk_available = False
 
 __version__ = "1.6.0"
@@ -42,7 +72,7 @@ __all__ = [
     "TransactionHandle",
     "TransactionMined",
     "AgentId",
-    "ChainId", 
+    "ChainId",
     "Address",
     "URI",
     "CID",
@@ -58,4 +88,19 @@ __all__ = [
     "SearchOptions",
     "FeedbackFilters",
     "SearchFeedbackParams",
+    "X402Payment",
+    "X402RequiredResponse",
+    "is_x402_required",
+    "Part",
+    "MessageResponse",
+    "TaskResponse",
+    "TaskSummary",
+    "TaskState",
+    "AgentTask",
+    "A2APaymentRequired",
+    "MessageA2AOptions",
+    "ListTasksOptions",
+    "LoadTaskOptions",
+    "AgentCardAuth",
+    "A2AClientFromSummary",
 ]
