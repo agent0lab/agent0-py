@@ -52,7 +52,7 @@ def request_with_x402(
     """
     Perform a single HTTP request with built-in 402 handling.
     - 2xx: return parsed result (default JSON body).
-    - 402: return X402RequiredResponse with x402Payment.pay() / pay_first().
+    - 402: return X402RequiredResponse with x402Payment.pay() (uses first-with-balance when check_balance is set) or pay_first().
     - Other status: raise.
     """
     url = options["url"]
@@ -129,7 +129,15 @@ def request_with_x402(
         def pay_fn(accept_arg: Optional[Union[X402Accept, int]] = None) -> Any:
             chosen: Optional[X402Accept] = None
             if accept_arg is None:
-                chosen = single_accept or (accepts[0] if accepts else None)
+                if deps.check_balance:
+                    for i, acc in enumerate(accepts):
+                        if acc and deps.check_balance(acc):
+                            chosen = accepts[i]
+                            break
+                    if chosen is None:
+                        raise ValueError("x402: no accept with sufficient balance")
+                if chosen is None:
+                    chosen = single_accept or (accepts[0] if accepts else None)
             elif isinstance(accept_arg, int):
                 if 0 <= accept_arg < len(accepts):
                     chosen = accepts[accept_arg]
@@ -203,12 +211,7 @@ def request_with_x402(
 
         pay_first_fn: Optional[Callable[[], Any]] = None
         if deps.check_balance:
-            def _pay_first() -> Any:
-                for i, acc in enumerate(accepts):
-                    if acc and deps.check_balance(acc):
-                        return pay_fn(i)
-                raise ValueError("x402: no accept with sufficient balance")
-            pay_first_fn = _pay_first
+            pay_first_fn = lambda: pay_fn()  # pay() with no arg now uses first-with-balance
 
         x402_payment = X402Payment(
             accepts=accepts,
