@@ -34,7 +34,7 @@ try:
 except ImportError:
     pass  # run without .env; use exported env vars only
 
-from agent0_sdk import SDK
+from agent0_sdk import SDK, isX402Required
 
 
 def _env(key: str, default: str = "") -> str:
@@ -93,7 +93,7 @@ def main() -> None:
             print("  [X402_DEBUG is set; payment payload and server response will be printed]")
         print("  Sending GET request...")
         result = sdk.request({"url": x402_url, "method": "GET", "headers": {}})
-        if getattr(result, "x402Required", False):
+        if isX402Required(result):
             n = len(result.x402Payment.accepts) if result.x402Payment else 0
             print("  Server returned 402 Payment Required.")
             print("  Payment options:", n, "accept(s). Building payment and retrying request...")
@@ -119,7 +119,7 @@ def main() -> None:
         agent = sdk.loadAgent(agent_id_pure)
         print("  Sending message...")
         out = agent.messageA2A("Hello, this is a demo message.")
-        if getattr(out, "x402Required", False):
+        if isX402Required(out):
             print("  Server returned 402 Payment Required (this agent can charge; see Flow 3).")
         else:
             print("  messageA2A response:", type(out).__name__)
@@ -133,14 +133,14 @@ def main() -> None:
                 print("  Task cancelled.")
         print("  Listing tasks...")
         tasks = agent.listTasks()
-        if getattr(tasks, "x402Required", False):
+        if isX402Required(tasks):
             print("  listTasks returned 402 Payment Required.")
         else:
             print("  listTasks: count =", len(tasks) if isinstance(tasks, list) else 0)
             if isinstance(tasks, list) and tasks:
                 print("  Loading first task and querying...")
                 loaded = agent.loadTask(tasks[0].taskId)
-                if not getattr(loaded, "x402Required", False):
+                if not isX402Required(loaded):
                     loaded.query()
                     print("  loadTask + query(): ok")
     except Exception as e:
@@ -154,7 +154,7 @@ def main() -> None:
         agent = sdk.loadAgent(agent_id_x402)
         print("  Sending message...")
         result = agent.messageA2A("Hello, please charge me once.")
-        if getattr(result, "x402Required", False):
+        if isX402Required(result):
             n = len(result.x402Payment.accepts) if result.x402Payment else 0
             print("  Server returned 402 Payment Required.")
             print("  Payment options:", n, "accept(s). Building payment and retrying...")
