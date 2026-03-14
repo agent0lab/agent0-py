@@ -200,8 +200,7 @@ def build_evm_payment(
         if accept.extra:
             # Send only server-style extra (e.g. name, version); omit maxTimeoutSeconds so it's only at top level (match TS)
             accepted["extra"] = {k: v for k, v in accept.extra.items() if k != "maxTimeoutSeconds"}
-        # Key order matches TS: x402Version, resource (if present), accepted, payload, extensions
-        payload_v2 = {"x402Version": 2}
+        payload_v2 = {"x402Version": 2, "scheme": scheme, "network": network_str}
         if snapshot and snapshot.resource:
             payload_v2["resource"] = {
                 "url": snapshot.resource.url,
