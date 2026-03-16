@@ -102,8 +102,23 @@ def isX402Required(result: Any) -> bool:
     return getattr(result, "x402Required", None) is True
 
 
+# EVM chain names/slugs: x402 spec V1 names (docs.x402.org network-and-token-support) + common slugs agents may send.
+# x402 official V1 EVM names: base, base-sepolia, avalanche, avalanche-fuji, polygon, polygon-amoy, sei, sei-testnet, skale-base, skale-base-sepolia.
+_EVM_NETWORK_SLUGS = frozenset([
+    "base", "base-sepolia", "base-mainnet", "base-goerli",
+    "ethereum", "mainnet", "ethereum-mainnet", "ethereum-sepolia", "sepolia", "goerli", "holesky",
+    "polygon", "polygon-amoy", "matic",
+    "arbitrum", "arbitrum-one", "arbitrum-sepolia",
+    "optimism", "optimism-mainnet", "optimism-sepolia",
+    "avalanche", "avalanche-fuji", "fuji", "bnb", "bnb-chain", "bsc", "bsc-testnet",
+    "linea", "linea-sepolia", "zksync", "zksync-sepolia",
+    "iotex", "iotex-testnet",
+    "sei", "sei-testnet", "skale-base", "skale-base-sepolia",
+])
+
+
 def _is_evm_accept(a: Union[X402Accept, Dict[str, Any]]) -> bool:
-    """True if the accept is EVM (eip155:* or numeric network)."""
+    """True if the accept is EVM (eip155:* or numeric network or known EVM chain name)."""
     if isinstance(a, X402Accept):
         n = a.network
     elif isinstance(a, dict):
@@ -112,8 +127,10 @@ def _is_evm_accept(a: Union[X402Accept, Dict[str, Any]]) -> bool:
         n = getattr(a, "network", None)
     if n is None or n == "":
         return True
-    s = str(n)
-    return bool(re.match(r"^eip155:\d+$", s)) or bool(re.match(r"^\d+$", s))
+    s = str(n).strip()
+    if re.match(r"^eip155:\d+$", s) or re.match(r"^\d+$", s):
+        return True
+    return s.lower() in _EVM_NETWORK_SLUGS
 
 
 def _dict_to_accept(d: Dict[str, Any]) -> X402Accept:
@@ -281,7 +298,16 @@ def parse_402_from_www_authenticate(header_value: Optional[str]) -> Parse402From
             price = str(round(n * 1e6))
         except ValueError:
             pass
-    network_str = f"eip155:{chain_id}" if chain_id and ":" not in chain_id else (chain_id if chain_id else None)
+    # x402 v1 uses chain names (e.g. "base-sepolia"); v2 uses CAIP-2 (eip155:chainId). Prefer explicit network.
+    raw_network = pairs.get("network") or chain_id
+    if not raw_network:
+        network_str = None
+    elif re.match(r"^eip155:\d+$", raw_network):
+        network_str = raw_network
+    elif re.match(r"^\d+$", raw_network.strip()):
+        network_str = f"eip155:{raw_network}"
+    else:
+        network_str = raw_network  # chain name as-is for v1
     accept = X402Accept(
         price=price,
         token=token,

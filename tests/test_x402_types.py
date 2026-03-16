@@ -72,7 +72,16 @@ class TestParse402FromWwwAuthenticate:
         assert len(result.accepts) == 1
         assert result.accepts[0].destination == "0x123"
         assert result.accepts[0].token == "0xabc"
-        assert "8453" in (result.accepts[0].network or "")
+        assert result.accepts[0].network == "eip155:8453"
+        assert result.x402Version == 2
+
+    def test_x402_v1_chain_name_preserved(self):
+        """x402 v1 uses chain names in header; network must be preserved as-is, not turned into eip155:name."""
+        h = 'x402 address="0x123", amount="0.01", token="0xabc", chainid="base-sepolia"'
+        result = parse_402_from_www_authenticate(h)
+        assert len(result.accepts) == 1
+        assert result.accepts[0].network == "base-sepolia"
+        assert result.x402Version == 1
 
 
 class TestFilterEvmAccepts:
@@ -85,6 +94,13 @@ class TestFilterEvmAccepts:
     def test_solana_style_removed(self):
         acc = X402Accept(price="1", token="So11111", network="solana:mainnet")
         assert len(filter_evm_accepts([acc])) == 0
+
+    def test_v1_chain_name_kept(self):
+        """x402 v1 uses chain names (e.g. base-sepolia), not chainId; filter must keep them."""
+        acc = X402Accept(price="1", token="0xabc", network="base-sepolia")
+        assert len(filter_evm_accepts([acc])) == 1
+        acc2 = X402Accept(price="1", token="0xdef", network="ethereum-mainnet")
+        assert len(filter_evm_accepts([acc2])) == 1
 
 
 class TestParse402SettlementFromHeader:
