@@ -127,6 +127,43 @@ class TestRegistrationFile:
         assert len(rf.trustModels) == 1
         assert rf.trustModels[0] == TrustModel.REPUTATION
 
+    def test_registration_file_from_dict_agent_card_maps_to_a2a(self):
+        """Human-readable A2A label used in some on-chain registration files."""
+        data = {
+            "name": "X",
+            "description": "Y",
+            "services": [
+                {
+                    "name": "Agent Card",
+                    "endpoint": "https://example.com/a2a.json",
+                    "version": "0.3",
+                }
+            ],
+            "supportedTrust": [],
+        }
+        rf = RegistrationFile.from_dict(data)
+        assert len(rf.endpoints) == 1
+        assert rf.endpoints[0].type == EndpointType.A2A
+        assert rf.endpoints[0].value == "https://example.com/a2a.json"
+
+    def test_registration_file_from_dict_type_value_shape(self):
+        data = {
+            "name": "X",
+            "description": "Y",
+            "services": [
+                {
+                    "type": "MCP",
+                    "value": "https://mcp.example.com/",
+                    "meta": {"version": "2025-06-18"},
+                }
+            ],
+            "supportedTrust": [],
+        }
+        rf = RegistrationFile.from_dict(data)
+        assert rf.endpoints[0].type == EndpointType.MCP
+        assert rf.endpoints[0].value == "https://mcp.example.com/"
+        assert rf.endpoints[0].meta.get("version") == "2025-06-18"
+
 
 class TestAgentSummary:
     """Test AgentSummary class."""

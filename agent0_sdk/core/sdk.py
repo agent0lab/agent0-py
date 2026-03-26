@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional, Union, Literal
+from typing import Any, Dict, List, Optional, Union, Literal, cast
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,8 @@ from .contracts import (
 from .agent import Agent
 from .indexer import AgentIndexer
 from .a2a_summary_client import A2AClientFromSummary
+from .mcp_summary_client import MCPClientFromSummary
+from .mcp_types import MCPClientOptions
 from .ipfs_client import IPFSClient
 from .feedback_manager import FeedbackManager
 from .transaction_handle import TransactionHandle
@@ -384,6 +386,20 @@ class SDK:
         if isinstance(agent_or_summary, Agent):
             return agent_or_summary
         return A2AClientFromSummary(self, agent_or_summary)
+
+    def create_mcp_client(
+        self,
+        agent_or_summary: Union[Agent, AgentSummary],
+        options: Optional[MCPClientOptions] = None,
+    ) -> Any:
+        """MCP handle from a loaded Agent, or lazy client from AgentSummary.mcp."""
+        opts: Dict[str, Any] = dict(options) if options else {}
+        if isinstance(agent_or_summary, Agent):
+            sid = opts.get("sessionId")
+            if sid is not None:
+                agent_or_summary.mcp.setSessionId(str(sid))
+            return agent_or_summary.mcp
+        return MCPClientFromSummary(self, agent_or_summary, opts)
 
     # Agent lifecycle methods
     def createAgent(

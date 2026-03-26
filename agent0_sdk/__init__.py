@@ -42,6 +42,20 @@ try:
         AgentCardAuth,
     )
     from .core.a2a_summary_client import A2AClientFromSummary
+    from .core.mcp_client import MCPClient, create_mcp_handle
+    from .core.mcp_summary_client import MCPClientFromSummary
+    from .core.mcp_types import (
+        MCPAuthOptions,
+        MCPClientInfo,
+        MCPClientOptions,
+        MCPInitializeResult,
+        MCPTool,
+        MCPPrompt,
+        MCPPromptGetResult,
+        MCPResource,
+        MCPResourceTemplate,
+        MCPPromptMessage,
+    )
     _sdk_available = True
 except ImportError:
     SDK = None
@@ -103,4 +117,17 @@ __all__ = [
     "LoadTaskOptions",
     "AgentCardAuth",
     "A2AClientFromSummary",
+    "MCPClient",
+    "create_mcp_handle",
+    "MCPClientFromSummary",
+    "MCPAuthOptions",
+    "MCPClientInfo",
+    "MCPClientOptions",
+    "MCPInitializeResult",
+    "MCPTool",
+    "MCPPrompt",
+    "MCPPromptGetResult",
+    "MCPResource",
+    "MCPResourceTemplate",
+    "MCPPromptMessage",
 ]

@@ -32,12 +32,16 @@ class X402Accept:
     destination: Optional[str] = None
     asset: Optional[str] = None
     extra: Dict[str, Any] = None
+    # TS buildEvmPayment: only typeof accept.maxTimeoutSeconds === 'number' counts; nested extra does not.
+    maxTimeoutSeconds: Optional[int] = None
 
     def __post_init__(self):
         if self.extra is None:
             self.extra = {}
 
     def get(self, key: str, default: Any = None) -> Any:
+        if key == "maxTimeoutSeconds" and self.maxTimeoutSeconds is not None:
+            return self.maxTimeoutSeconds
         return self.extra.get(key, default)
 
 
@@ -173,10 +177,13 @@ def _normalize_accept_entry(entry: Dict[str, Any]) -> X402Accept:
     # Match TS: extra = only the server's "extra" field (e.g. { name, version }), not the whole entry
     extra_raw = pr.get("extra") or entry.get("extra")
     extra = dict(extra_raw) if isinstance(extra_raw, dict) else {}
-    # Preserve maxTimeoutSeconds so accept.get("maxTimeoutSeconds", 60) returns server value (TS has it from ...entry)
-    for key in ("maxTimeoutSeconds",):
-        if (pr.get(key) is not None) or (entry.get(key) is not None):
-            extra[key] = pr.get(key) if pr.get(key) is not None else entry.get(key)
+    mt: Optional[int] = None
+    for src in (entry, pr):
+        if isinstance(src, dict):
+            v = src.get("maxTimeoutSeconds")
+            if isinstance(v, (int, float)):
+                mt = int(v)
+                break
     return X402Accept(
         price=price,
         token=token,
@@ -187,6 +194,7 @@ def _normalize_accept_entry(entry: Dict[str, Any]) -> X402Accept:
         destination=pr.get("destination") or pr.get("payTo"),
         asset=pr.get("asset"),
         extra=extra,
+        maxTimeoutSeconds=mt,
     )
 
 
