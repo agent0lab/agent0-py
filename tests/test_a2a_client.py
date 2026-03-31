@@ -14,6 +14,7 @@ from agent0_sdk.core.a2a_client import (
     parts_for_send,
     _part_from_dict,
 )
+from agent0_sdk.core.a2a_summary_client import A2AClientFromUrl
 
 
 class TestNormalizeBinding:
@@ -111,3 +112,24 @@ class TestPartFromDict:
         p = _part_from_dict({"text": "flat", "url": "https://u"})
         assert p.text == "flat"
         assert p.url == "https://u"
+
+
+class TestA2AClientFromUrl:
+    def test_resolves_on_first_message(self):
+        sdk = Mock()
+        sdk.getX402RequestDeps.return_value = None
+        client = A2AClientFromUrl(sdk, "https://a2a.example.com")
+        with patch("agent0_sdk.core.a2a_summary_client.resolve_a2a_from_endpoint_url") as resolve_mock, \
+             patch("agent0_sdk.core.a2a_summary_client.send_message") as send_mock:
+            resolve_mock.return_value = {
+                "baseUrl": "https://a2a.example.com",
+                "a2aVersion": "0.3",
+                "binding": "HTTP+JSON",
+                "tenant": None,
+                "auth": None,
+            }
+            send_mock.return_value = {"content": "ok"}
+            result = client.messageA2A("ping")
+        assert result["content"] == "ok"
+        resolve_mock.assert_called_once_with("https://a2a.example.com")
+        send_mock.assert_called_once()

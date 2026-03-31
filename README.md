@@ -190,6 +190,18 @@ for agent in results:
 agent_summary = sdk.getAgent("11155111:123")
 ```
 
+### 4b. Create MCP/A2A Clients Directly from URL
+
+```python
+# MCP: URL is treated as the direct MCP endpoint
+mcp = sdk.create_mcp_client("https://mcp.example.com/mcp")
+tools = mcp.listTools()
+
+# A2A: URL can be an agent-card URL or base URL (discovery is applied)
+a2a = sdk.createA2AClient("https://a2a.example.com")
+reply = a2a.messageA2A("hello")
+```
+
 ### 5. Give and Retrieve Feedback
 
 ```python

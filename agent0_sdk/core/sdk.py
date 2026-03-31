@@ -26,9 +26,10 @@ from .contracts import (
 )
 from .agent import Agent
 from .indexer import AgentIndexer
-from .a2a_summary_client import A2AClientFromSummary
+from .a2a_summary_client import A2AClientFromSummary, A2AClientFromUrl
 from .mcp_summary_client import MCPClientFromSummary
 from .mcp_types import MCPClientOptions
+from .mcp_client import create_mcp_handle
 from .ipfs_client import IPFSClient
 from .feedback_manager import FeedbackManager
 from .transaction_handle import TransactionHandle
@@ -380,20 +381,24 @@ class SDK:
 
     def createA2AClient(
         self,
-        agent_or_summary: Union[Agent, AgentSummary],
-    ) -> Union[Agent, A2AClientFromSummary]:
-        """Return an A2A client: Agent as-is, AgentSummary wrapped in A2AClientFromSummary."""
+        agent_or_summary: Union[Agent, AgentSummary, str],
+    ) -> Union[Agent, A2AClientFromSummary, A2AClientFromUrl]:
+        """Return an A2A client: Agent as-is, AgentSummary wrapped, or URL-backed client."""
         if isinstance(agent_or_summary, Agent):
             return agent_or_summary
+        if isinstance(agent_or_summary, str):
+            return A2AClientFromUrl(self, agent_or_summary)
         return A2AClientFromSummary(self, agent_or_summary)
 
     def create_mcp_client(
         self,
-        agent_or_summary: Union[Agent, AgentSummary],
+        agent_or_summary: Union[Agent, AgentSummary, str],
         options: Optional[MCPClientOptions] = None,
     ) -> Any:
-        """MCP handle from a loaded Agent, or lazy client from AgentSummary.mcp."""
+        """MCP handle from a loaded Agent, AgentSummary.mcp, or direct MCP URL."""
         opts: Dict[str, Any] = dict(options) if options else {}
+        if isinstance(agent_or_summary, str):
+            return create_mcp_handle(agent_or_summary, opts, self.getX402RequestDeps())
         if isinstance(agent_or_summary, Agent):
             sid = opts.get("sessionId")
             if sid is not None:

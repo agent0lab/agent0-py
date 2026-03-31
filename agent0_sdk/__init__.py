@@ -42,6 +42,7 @@ try:
         AgentCardAuth,
     )
     from .core.a2a_summary_client import A2AClientFromSummary
+    from .core.a2a_summary_client import A2AClientFromUrl
     from .core.mcp_client import MCPClient, create_mcp_handle
     from .core.mcp_summary_client import MCPClientFromSummary
     from .core.mcp_types import (
@@ -77,6 +78,7 @@ except ImportError:
     LoadTaskOptions = None
     AgentCardAuth = None
     A2AClientFromSummary = None
+    A2AClientFromUrl = None
     _sdk_available = False
 
 __version__ = "1.7.1"
@@ -117,6 +119,7 @@ __all__ = [
     "LoadTaskOptions",
     "AgentCardAuth",
     "A2AClientFromSummary",
+    "A2AClientFromUrl",
     "MCPClient",
     "create_mcp_handle",
     "MCPClientFromSummary",

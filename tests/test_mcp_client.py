@@ -400,3 +400,27 @@ class TestMCPSummaryAndSDK:
             client = sdk.create_mcp_client(summary)
             client.listTools()
         assert req.call_count == 3
+
+    def test_create_mcp_client_url(self):
+        responses = [
+            _json_resp(
+                200,
+                {"jsonrpc": "2.0", "id": "1", "result": {"protocolVersion": "2025-06-18"}},
+            ),
+            _json_resp(202, ""),
+            _json_resp(
+                200,
+                {"jsonrpc": "2.0", "id": "2", "result": {"tools": []}},
+            ),
+        ]
+        with patch("agent0_sdk.core.sdk.Web3Client") as mock_web3:
+            mock_web3.return_value.chain_id = 84532
+            sdk = SDK(
+                chainId=84532,
+                rpcUrl="https://base-sepolia.drpc.org",
+                signer="0x1234567890abcdef",
+            )
+        with patch("requests.request", side_effect=responses) as req:
+            client = sdk.create_mcp_client("https://mcp.example.com/mcp")
+            client.listTools()
+        assert req.call_count == 3
