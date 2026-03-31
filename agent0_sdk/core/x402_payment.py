@@ -56,14 +56,14 @@ def _random_bytes32_hex() -> str:
 
 
 def _token_address(accept: X402Accept, web3_client: Any) -> str:
-    raw = accept.token or accept.asset or ""
+    raw = str(accept.token or accept.asset or "").strip()
     if not raw or not web3_client.is_address(raw):
         raise ValueError("x402: accept has no valid token/asset address")
     return web3_client.to_checksum_address(raw)
 
 
 def _destination_address(accept: X402Accept, web3_client: Any) -> str:
-    raw = accept.destination or accept.get("payTo") or ""
+    raw = str(accept.destination or accept.get("payTo") or "").strip()
     if not raw or not web3_client.is_address(raw):
         raise ValueError("x402: accept has no valid destination/payTo address")
     return web3_client.to_checksum_address(raw)
@@ -107,20 +107,32 @@ def _get_token_domain(
 
 
 def check_evm_balance(accept: X402Accept, web3_client: Any) -> bool:
-    """Return True if signer has sufficient token balance for the accept."""
-    try:
-        token = _token_address(accept, web3_client)
-        if not web3_client.account:
+    """Return True if signer has sufficient token balance for the accept.
+
+    Retries once after a short sleep when the RPC error looks like HTTP 429
+    (common on public Base RPC). Without this, pay() can reject with
+    'no accept with sufficient balance' even when balance is fine, because
+    transient RPC errors are indistinguishable from failure here.
+    """
+    for attempt in range(2):
+        try:
+            token = _token_address(accept, web3_client)
+            if not web3_client.account:
+                return False
+            signer = web3_client.account.address
+            contract = web3_client.get_contract(token, BALANCE_OF_ABI)
+            balance = web3_client.call_contract(contract, "balanceOf", signer)
+            price = int(_value_amount(accept))
+            if hasattr(balance, "real"):
+                balance = int(balance)
+            return balance >= price
+        except Exception as ex:
+            err_s = str(ex).lower()
+            if attempt == 0 and ("429" in err_s or "too many requests" in err_s):
+                time.sleep(0.75)
+                continue
             return False
-        signer = web3_client.account.address
-        contract = web3_client.get_contract(token, BALANCE_OF_ABI)
-        balance = web3_client.call_contract(contract, "balanceOf", signer)
-        price = int(_value_amount(accept))
-        if hasattr(balance, "real"):
-            balance = int(balance)
-        return balance >= price
-    except Exception:
-        return False
+    return False
 
 
 def build_evm_payment(
@@ -189,17 +201,22 @@ def build_evm_payment(
     _compact = {"separators": (",", ":")}
 
     if is_v2:
+        # Match TS buildEvmPayment: top-level numeric maxTimeoutSeconds only; else 60 (not nested extra).
+        max_timeout = (
+            int(accept.maxTimeoutSeconds)
+            if accept.maxTimeoutSeconds is not None
+            else 60
+        )
         accepted = {
             "scheme": scheme,
             "network": network_str,
             "amount": value,
             "asset": token,
             "payTo": pay_to,
-            "maxTimeoutSeconds": accept.get("maxTimeoutSeconds", 60),
+            "maxTimeoutSeconds": max_timeout,
         }
         if accept.extra:
-            # Send only server-style extra (e.g. name, version); omit maxTimeoutSeconds so it's only at top level (match TS)
-            accepted["extra"] = {k: v for k, v in accept.extra.items() if k != "maxTimeoutSeconds"}
+            accepted["extra"] = dict(accept.extra)
         payload_v2 = {"x402Version": 2, "scheme": scheme, "network": network_str}
         if snapshot and snapshot.resource:
             payload_v2["resource"] = {

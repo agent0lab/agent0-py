@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 from agent0_sdk.core.sdk import SDK
 from agent0_sdk.core.models import EndpointType, TrustModel
+from agent0_sdk.core.a2a_summary_client import A2AClientFromUrl
 
 
 class TestSDK:
@@ -123,6 +124,17 @@ class TestSDK:
                 registrationDataUriMaxBytes=1234,
             )
             assert sdk.registrationDataUriMaxBytes == 1234
+
+    def test_create_a2a_client_accepts_url(self):
+        with patch('agent0_sdk.core.sdk.Web3Client') as mock_web3:
+            mock_web3.return_value.chain_id = 11155111
+            sdk = SDK(
+                chainId=11155111,
+                signer="0x1234567890abcdef",
+                rpcUrl="https://eth-sepolia.g.alchemy.com/v2/test"
+            )
+        client = sdk.createA2AClient("https://a2a.example.com")
+        assert isinstance(client, A2AClientFromUrl)
 
 
 class TestAgent:

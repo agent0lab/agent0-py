@@ -31,6 +31,29 @@ class EndpointType(Enum):
     OASF = "OASF"
 
 
+# Legacy + human-readable service names in on-chain/IPFS registration JSON (mirrors TS sdk ENDPOINT_TYPE_MAP).
+_ENDPOINT_LEGACY_LABEL_TO_TYPE: Dict[str, EndpointType] = {
+    "mcp": EndpointType.MCP,
+    "a2a": EndpointType.A2A,
+    "ens": EndpointType.ENS,
+    "did": EndpointType.DID,
+    "agentwallet": EndpointType.WALLET,
+    "wallet": EndpointType.WALLET,
+    "agent card": EndpointType.A2A,
+}
+
+
+def _coerce_endpoint_type(raw: str) -> EndpointType:
+    """Map registration endpoint label to EndpointType (case-insensitive)."""
+    key = str(raw).strip().lower()
+    if key in _ENDPOINT_LEGACY_LABEL_TO_TYPE:
+        return _ENDPOINT_LEGACY_LABEL_TO_TYPE[key]
+    for et in EndpointType:
+        if et.value.lower() == key or et.name.lower() == key:
+            return et
+    raise ValueError(f"Unknown endpoint type in registration: {raw!r}")
+
+
 class TrustModel(Enum):
     """Trust models supported by the SDK."""
     REPUTATION = "reputation"
@@ -120,16 +143,38 @@ class RegistrationFile:
         endpoints = []
         raw_services = data.get("services", data.get("endpoints", []))
         for ep_data in raw_services:
-            name = ep_data["name"]
-            # Special handling for agentWallet - it's not a standard endpoint type
-            if name == "agentWallet":
-                # Skip agentWallet endpoints as they're handled separately via walletAddress field
+            if not isinstance(ep_data, dict):
                 continue
-            
-            ep_type = EndpointType(name)
-            ep_value = ep_data["endpoint"]
-            ep_meta = {k: v for k, v in ep_data.items() if k not in ["name", "endpoint"]}
-            endpoints.append(Endpoint(type=ep_type, value=ep_value, meta=ep_meta))
+            # New shape: { type, value, meta?, ... } (matches TS _transformEndpoints when type+value set)
+            if ep_data.get("type") is not None and "value" in ep_data:
+                raw_type = str(ep_data["type"])
+                if raw_type.strip().lower().replace(" ", "") in ("agentwallet",):
+                    continue
+                ep_type = _coerce_endpoint_type(raw_type)
+                ep_value = str(ep_data["value"])
+                ep_meta: Dict[str, Any] = (
+                    dict(ep_data["meta"]) if isinstance(ep_data.get("meta"), dict) else {}
+                )
+                for k, v in ep_data.items():
+                    if k in ("type", "value", "meta"):
+                        continue
+                    ep_meta.setdefault(k, v)
+                endpoints.append(Endpoint(type=ep_type, value=ep_value, meta=ep_meta))
+                continue
+            # Legacy shape: { name, endpoint, ... }
+            if "name" not in ep_data:
+                continue
+            name = ep_data["name"]
+            if name == "agentWallet":
+                continue
+            ep_type = _coerce_endpoint_type(str(name))
+            ep_value = ep_data.get("endpoint", ep_data.get("value", ""))
+            ep_meta = {
+                k: v
+                for k, v in ep_data.items()
+                if k not in ("name", "endpoint", "value")
+            }
+            endpoints.append(Endpoint(type=ep_type, value=str(ep_value), meta=ep_meta))
 
         trust_models = []
         for tm in data.get("supportedTrust", []):

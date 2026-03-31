@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 from .transaction_handle import TransactionHandle
+from .mcp_client import create_mcp_handle
 from .a2a import (
     MessageResponse,
     TaskResponse,
@@ -60,6 +61,7 @@ class Agent:
         self._endpoint_crawler = EndpointCrawler(timeout=5)
         # Lazy A2A resolution cache (baseUrl, a2aVersion, binding, tenant, auth)
         self._cached_a2a: Optional[Dict[str, Any]] = None
+        self._mcp_handle: Optional[Any] = None
 
     # Read-only properties for direct access
     @property
@@ -166,6 +168,34 @@ class Agent:
             if endpoint.type == EndpointType.MCP:
                 return endpoint.value
         return None
+
+    @property
+    def mcp(self) -> Any:
+        """Lazy MCP JSON-RPC handle (Streamable HTTP); uses SDK x402 deps when configured."""
+        if self._mcp_handle is not None:
+            return self._mcp_handle
+        endpoint = self.mcpEndpoint
+        if not endpoint or not (
+            str(endpoint).startswith("http://") or str(endpoint).startswith("https://")
+        ):
+            raise RuntimeError("Agent has no MCP endpoint")
+        mcp_ep = next(
+            (
+                e
+                for e in self.registration_file.endpoints
+                if e.type == EndpointType.MCP
+            ),
+            None,
+        )
+        version = "2025-06-18"
+        if mcp_ep and mcp_ep.meta.get("version") is not None:
+            version = str(mcp_ep.meta.get("version"))
+        self._mcp_handle = create_mcp_handle(
+            str(endpoint),
+            {"protocolVersion": version},
+            self.sdk.getX402RequestDeps(),
+        )
+        return self._mcp_handle
 
     @property
     def a2aEndpoint(self) -> Optional[str]:
@@ -515,6 +545,8 @@ class Agent:
             ]
         
         self.registration_file.updatedAt = int(time.time())
+        if self.mcpEndpoint is None:
+            self._mcp_handle = None
         return self
 
     def removeEndpoints(self) -> 'Agent':
