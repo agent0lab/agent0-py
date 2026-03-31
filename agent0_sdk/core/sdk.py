@@ -390,7 +390,7 @@ class SDK:
             return A2AClientFromUrl(self, agent_or_summary)
         return A2AClientFromSummary(self, agent_or_summary)
 
-    def create_mcp_client(
+    def createMCPClient(
         self,
         agent_or_summary: Union[Agent, AgentSummary, str],
         options: Optional[MCPClientOptions] = None,
@@ -405,6 +405,14 @@ class SDK:
                 agent_or_summary.mcp.setSessionId(str(sid))
             return agent_or_summary.mcp
         return MCPClientFromSummary(self, agent_or_summary, opts)
+
+    def create_mcp_client(
+        self,
+        agent_or_summary: Union[Agent, AgentSummary, str],
+        options: Optional[MCPClientOptions] = None,
+    ) -> Any:
+        """Backward-compatible alias for createMCPClient()."""
+        return self.createMCPClient(agent_or_summary, options)
 
     # Agent lifecycle methods
     def createAgent(

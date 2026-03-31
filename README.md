@@ -194,7 +194,7 @@ agent_summary = sdk.getAgent("11155111:123")
 
 ```python
 # MCP: URL is treated as the direct MCP endpoint
-mcp = sdk.create_mcp_client("https://mcp.example.com/mcp")
+mcp = sdk.createMCPClient("https://mcp.example.com/mcp")
 tools = mcp.listTools()
 
 # A2A: URL can be an agent-card URL or base URL (discovery is applied)
